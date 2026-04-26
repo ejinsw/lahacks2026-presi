@@ -25,10 +25,10 @@ export const techStack = [
 ];
 
 export const computeStats = [
-  { value: "1–5M Gaussians", label: "reconstructed per scene, each storing 59 parameters: 3D position, rotation, scale, opacity, and spherical-harmonic color" },
-  { value: "≥10 GFLOP / frame", label: "dense rasterization + gradient descent over the full Gaussian field every SLAM keyframe" },
-  { value: "24+ GB VRAM", label: "minimum GPU memory to keep the full Gaussian field in RAM without paging — MonoGS requires an RTX 3090 at minimum" },
-  { value: "128 GB unified", label: "GX10 memory — 5× the minimum spec, entire Gaussian field held across all SLAM iterations with zero swapping" },
+  { value: "56 GB", label: "raw 1080p RGB for a 5-min scan at 30 FPS — 9,000 frames that a normal 8–24 GB GPU cannot hold alongside a live 3D map and active optimizer" },
+  { value: "128 GB unified", label: "GX10 memory keeps video stream, active Gaussian map, optimizer state, and local AI model fully resident on one machine with zero swapping" },
+  { value: "273 GB/s", label: "memory bandwidth — Gaussian Splatting is memory-bound as much as compute-bound; throughput determines how fast the scene can grow each keyframe" },
+  { value: "200B params", label: "local AI inference capacity on GX10 — run a vision-language model on the reconstructed space with no cloud upload of private video or geometry" },
 ];
 
 export const slides = [
@@ -61,9 +61,9 @@ export const slides = [
   },
   {
     eyebrow: "Compute",
-    title: "MonoGS needs serious local compute.",
+    title: "One machine. Full pipeline.",
     body:
-      "Gaussian Splatting SLAM is dense, iterative, and memory hungry. GX10-class hardware lets Recall process the reconstruction locally instead of sending intimate home footage to a distant GPU queue.",
+      "At 1080p and 30 FPS, a 5-minute scan produces 9,000 frames and roughly 56 GB of raw RGB data. MonoGS tracks the camera, optimizes a growing 3D Gaussian map, and renders the scene — while the GX10's 128 GB unified memory, 273 GB/s bandwidth, and Blackwell GPU keep the full pipeline local. No cloud. No latency. No privacy trade-off.",
     tone: "stats",
   },
   {
