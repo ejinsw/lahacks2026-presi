@@ -11,6 +11,8 @@ export const presentationAssets = {
   sourcePointCloud: "/models/TokyoAlleyway1_500k.ply",
   pipelineVideo: "/videos/royce.mp4",
   pipelinePointCloud: null,
+  demo1: "/videos/demo1.mp4",
+  demo2: "/videos/demo2.mp4",
 };
 
 export const techStack = [
@@ -47,7 +49,7 @@ export const slides = [
   },
   {
     eyebrow: "The Solution",
-    title: "Vid to Place.",
+    title: "Expanding with GenAI.",
     body:
       "Recall turns a 2D photo or video into a 3D point cloud that can be revisited from different perspectives. The memory stops being locked to the original camera and starts behaving like a place.",
     tone: "solution",

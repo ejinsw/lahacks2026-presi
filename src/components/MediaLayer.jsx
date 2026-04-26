@@ -3,12 +3,12 @@ import { useAtomValue } from "jotai";
 import { presentationAssets, slideAtom } from "../presentationState";
 
 const galleryItems = [
-  { type: "video", className: "wide",  label: "Royce Hall",    src: "/videos/royce.mp4" },
-  { type: "video", className: "warm",  label: "point cloud",   src: "/videos/powell.mp4" },
-  { type: "video", className: "cool",  label: "ASUS GX10",     src: "/videos/asus.mp4" },
-  { type: "video", className: "tall",  label: "Henry",   src: "/videos/henry.mp4" },
-  { type: "video", className: "paper", label: "Bruin Bear",   src: "/videos/bruinbear.mp4" },
-  { type: "video", className: "green", label: "reconstructed", src: "/videos/excloud.mp4" },
+  { type: "video", className: "wide",  src: "/videos/royce.mp4" },
+  { type: "video", className: "warm",  src: "/videos/powell.mp4" },
+  { type: "video", className: "cool",  src: "/videos/asus.mp4" },
+  { type: "video", className: "tall",  src: "/videos/henry.mp4" },
+  { type: "video", className: "paper", src: "/videos/bruinbear.mp4" },
+  { type: "video", className: "green", src: "/videos/vendingmachine.mp4" },
 ];
 
 function MemoryGallery() {
@@ -23,7 +23,7 @@ function MemoryGallery() {
       {galleryItems.map((item, index) => (
         <motion.div
           className={`gallery-card ${item.className}`}
-          key={`${item.label}-${index}`}
+          key={`${item.className}-${index}`}
           initial={{ opacity: 0, y: 22, rotate: index % 2 ? 2.4 : -2.4 }}
           animate={{ opacity: 1, y: 0, rotate: index % 2 ? 1.1 : -1.1 }}
           transition={{ delay: index * 0.07, duration: 0.7 }}
@@ -33,7 +33,6 @@ function MemoryGallery() {
           ) : (
             <div className="photo-memory" />
           )}
-          <span>{item.label}</span>
         </motion.div>
       ))}
     </motion.div>
@@ -88,10 +87,10 @@ function PipelineMedia() {
       <motion.div
         className="pipeline-input-frame"
         initial={{ opacity: 0, x: -24 }}
-        animate={{ opacity: [0, 0.88, 0.38], x: [-24, 0, 42] }}
-        transition={{ duration: 2.8, times: [0, 0.4, 1] }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.9 }}
       >
-        <video src={presentationAssets.pipelineVideo} autoPlay muted loop playsInline />
+        <video src={presentationAssets.demo1} autoPlay muted loop playsInline />
       </motion.div>
 
       <motion.div
@@ -100,7 +99,7 @@ function PipelineMedia() {
         animate={{ opacity: 1, scale: 1 }}
         transition={{ delay: 0.45, duration: 0.9 }}
       >
-        <video src={presentationAssets.cloudVideo} autoPlay muted loop playsInline />
+        <video src={presentationAssets.demo2} autoPlay muted loop playsInline />
       </motion.div>
     </motion.div>
   );

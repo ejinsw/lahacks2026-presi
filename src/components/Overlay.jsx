@@ -21,9 +21,9 @@ function modSlide(value) {
 
 function PipelineStrip() {
   const nodes = [
-    { label: "Capture", detail: "phone video or image set" },
-    { label: "ASUS GX10", detail: "local MonoGS processing" },
-    { label: "Point cloud", detail: "same memory, spatialized" },
+    { label: "Capture", detail: "Send old videos through the webapp to send to the GX10 through a secure local api." },
+    { label: "ASUS GX10", detail: "Processes the video using MonoGS and generates up to 5m+ gaussian splats." },
+    { label: "Point cloud", detail: "Receive the finalized 3D memory and see it orbiting your personal space." },
   ];
 
   return (
