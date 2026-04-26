@@ -2,14 +2,15 @@ import { atom } from "jotai";
 
 export const slideAtom = atom(0);
 
-export const developers = ["Elijah", "Ejin"];
+export const developers = ["Elijah Won", "Henry Wei"];
 
 export const presentationAssets = {
   globeModel: "/models/globe/scene.gltf",
-  sourceVideo: "/videos/example.mp4",
-  sourcePointCloud: "/models/example.ply",
-  pipelineVideo: "/videos/example.mp4",
-  pipelinePointCloud: "/models/example.ply",
+  sourceVideo: "/videos/exvid.mp4",
+  cloudVideo: "/videos/excloud.mp4",
+  sourcePointCloud: "/models/TokyoAlleyway1_500k.ply",
+  pipelineVideo: "/videos/royce.mp4",
+  pipelinePointCloud: null,
 };
 
 export const techStack = [
@@ -24,10 +25,10 @@ export const techStack = [
 ];
 
 export const computeStats = [
-  { value: "MonoGS", label: "Gaussian Splatting SLAM from monocular video" },
-  { value: "1 petaFLOP", label: "AI compute available on ASUS Ascent GX10" },
-  { value: "128 GB", label: "coherent unified system memory" },
-  { value: "200B", label: "parameter-class local AI workload support" },
+  { value: "1–5M Gaussians", label: "reconstructed per scene, each storing 59 parameters: 3D position, rotation, scale, opacity, and spherical-harmonic color" },
+  { value: "≥10 GFLOP / frame", label: "dense rasterization + gradient descent over the full Gaussian field every SLAM keyframe" },
+  { value: "24+ GB VRAM", label: "minimum GPU memory to keep the full Gaussian field in RAM without paging — MonoGS requires an RTX 3090 at minimum" },
+  { value: "128 GB unified", label: "GX10 memory — 5× the minimum spec, entire Gaussian field held across all SLAM iterations with zero swapping" },
 ];
 
 export const slides = [
@@ -39,16 +40,16 @@ export const slides = [
   },
   {
     eyebrow: "The Problem",
-    title: "Memory is not a solo camera.",
+    title: "Memories are more than videos.",
     body:
-      "For refugees forced to flee home, photos and videos may be the only record left. But a single clip only preserves one narrow path. A place is remembered through many angles, people, rooms, sounds, and fragments held by different people.",
+      "For refugees forced to flee home, photos and videos may be the only record left. But a single clip only preserves one narrow path. A place is remembered through many angles, people, rooms, sounds, and fragments held by different perspectives.",
     tone: "problem",
   },
   {
     eyebrow: "The Solution",
-    title: "Flat memories become spatial again.",
+    title: "Vid to Place.",
     body:
-      "Recall turns a 2D photo or video into a 3D point cloud that can be revisited from new positions. The memory stops being locked to the original camera and starts behaving like a place.",
+      "Recall turns a 2D photo or video into a 3D point cloud that can be revisited from different perspectives. The memory stops being locked to the original camera and starts behaving like a place.",
     tone: "solution",
   },
   {
@@ -67,7 +68,7 @@ export const slides = [
   },
   {
     eyebrow: "Credits",
-    title: "Built by two developers.",
+    title: "LAHacks 2026.",
     body:
       "Recall combines real-time web graphics, point cloud reconstruction, and local AI compute into a presentation-native prototype.",
     tone: "credits",

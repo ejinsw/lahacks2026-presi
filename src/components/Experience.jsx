@@ -1,8 +1,7 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef } from "react";
 import { useAtomValue } from "jotai";
 import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
 import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader";
 import { presentationAssets, slideAtom } from "../presentationState";
 
@@ -30,234 +29,84 @@ function setOpacity(material, opacity) {
   material.needsUpdate = true;
 }
 
-function makeGlobeTexture() {
-  const canvas = document.createElement("canvas");
-  canvas.width = 1024;
-  canvas.height = 512;
-  const ctx = canvas.getContext("2d");
 
-  ctx.fillStyle = "#102027";
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  ctx.strokeStyle = "rgba(238, 229, 202, 0.14)";
-  ctx.lineWidth = 1;
-  for (let x = 0; x <= canvas.width; x += 64) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
-    ctx.stroke();
-  }
-  for (let y = 32; y <= canvas.height; y += 64) {
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-    ctx.stroke();
-  }
-
-  const land = [
-    [[120, 170], [170, 112], [250, 130], [286, 190], [262, 248], [204, 260], [136, 226]],
-    [[250, 270], [320, 256], [360, 318], [338, 420], [280, 472], [236, 398]],
-    [[470, 152], [530, 106], [628, 124], [660, 190], [610, 234], [510, 220]],
-    [[570, 228], [654, 244], [694, 320], [652, 412], [574, 392], [542, 310]],
-    [[682, 140], [820, 118], [912, 176], [886, 262], [768, 248], [704, 202]],
-    [[780, 308], [858, 300], [922, 354], [892, 420], [798, 410]],
-  ];
-
-  land.forEach((poly, index) => {
-    ctx.beginPath();
-    poly.forEach(([x, y], i) => {
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.closePath();
-    ctx.fillStyle = index % 2 === 0 ? "#d6d2aa" : "#9ebf9e";
-    ctx.fill();
-  });
-
-  ctx.fillStyle = "rgba(236, 150, 86, 0.62)";
-  ctx.beginPath();
-  ctx.arc(575, 260, 13, 0, Math.PI * 2);
-  ctx.fill();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 8;
-  return texture;
-}
-
-function makeGlobeParticles(count = 3600) {
-  const base = new Float32Array(count * 3);
-  const live = new Float32Array(count * 3);
-  const colors = new Float32Array(count * 3);
-  const scatter = new Float32Array(count * 3);
-
-  for (let i = 0; i < count; i++) {
-    const y = 1 - (i / (count - 1)) * 2;
-    const radius = Math.sqrt(Math.max(0, 1 - y * y));
-    const theta = i * Math.PI * (3 - Math.sqrt(5));
-    const x = Math.cos(theta) * radius;
-    const z = Math.sin(theta) * radius;
-    const lat = Math.asin(y);
-    const lon = Math.atan2(z, x);
-    const land =
-      Math.sin(lon * 2.3 + lat * 4.1) + Math.cos(lon * 5.1 - lat * 1.8) > 0.68;
-    const color = new THREE.Color(land ? "#e0d8a6" : "#77b2b3");
-    const jitter = 0.78 + Math.random() * 0.22;
-
-    base[i * 3] = x * 1.82;
-    base[i * 3 + 1] = y * 1.82;
-    base[i * 3 + 2] = z * 1.82;
-    live[i * 3] = base[i * 3];
-    live[i * 3 + 1] = base[i * 3 + 1];
-    live[i * 3 + 2] = base[i * 3 + 2];
-    colors[i * 3] = color.r * jitter;
-    colors[i * 3 + 1] = color.g * jitter;
-    colors[i * 3 + 2] = color.b * jitter;
-    scatter[i * 3] = x * (0.12 + Math.random() * 0.48) + (Math.random() - 0.5) * 0.22;
-    scatter[i * 3 + 1] = y * (0.12 + Math.random() * 0.48) + (Math.random() - 0.5) * 0.22;
-    scatter[i * 3 + 2] = z * (0.12 + Math.random() * 0.48) + (Math.random() - 0.5) * 0.22;
-  }
-
-  return { base, live, colors, scatter, count };
-}
+// Each particle gets a fixed orbital plane (random tilt) and a speed multiplier.
+// They all orbit at roughly the globe surface radius + a small spread.
+const ORBIT_COUNT = 16;
+const orbitData = Array.from({ length: ORBIT_COUNT }, (_, i) => ({
+  tiltX: (Math.random() - 0.5) * Math.PI,       // random plane tilt
+  tiltZ: (Math.random() - 0.5) * Math.PI,
+  phase:  (i / ORBIT_COUNT) * Math.PI * 2,       // spread starting angles
+  speed:  0.18 + Math.random() * 0.28,           // vary speed per particle
+  radius: 1.92 + Math.random() * 0.28,           // slightly outside the wire sphere
+}));
 
 function TitleGlobe({ active }) {
   const { viewport } = useThree();
   const group = useRef();
-  const fallbackMaterial = useRef();
-  const wireMaterial = useRef();
-  const pointsMaterial = useRef();
-  const pointsGeometry = useRef();
-  const globeMaterials = useRef([]);
-  const activeTime = useRef(0);
-  const [globeScene, setGlobeScene] = useState(null);
+  const wireMat = useRef();
+  const orbitGeo = useRef();
+  const orbitMat = useRef();
   const fade = useStageFade(active, 4.6);
-  const texture = useMemo(() => makeGlobeTexture(), []);
-  const particles = useMemo(() => makeGlobeParticles(), []);
   const isWide = viewport.width > 6.2;
 
-  useEffect(() => () => texture.dispose(), [texture]);
+  // Pre-allocate position buffer for all orbit particles
+  const orbitPos = useMemo(() => new Float32Array(ORBIT_COUNT * 3), []);
 
-  useEffect(() => {
-    let disposed = false;
-    const loader = new GLTFLoader();
-
-    loader.load(
-      presentationAssets.globeModel,
-      (gltf) => {
-        if (disposed) return;
-        const scene = gltf.scene;
-        const materials = [];
-
-        scene.traverse((child) => {
-          if (!child.isMesh) return;
-          const existing = child.material;
-          const map = Array.isArray(existing) ? existing[0]?.map : existing?.map;
-          const material = new THREE.MeshBasicMaterial({
-            color: map ? "#ffffff" : "#d9d2aa",
-            map: map ?? null,
-            transparent: true,
-            opacity: 0,
-            toneMapped: false,
-            depthWrite: false,
-          });
-          child.material = material;
-          child.renderOrder = 1;
-          materials.push(material);
-        });
-
-        scene.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(scene);
-        const center = new THREE.Vector3();
-        const size = new THREE.Vector3();
-        box.getCenter(center);
-        box.getSize(size);
-        const scale = 3.65 / (Math.max(size.x, size.y, size.z) || 1);
-        scene.scale.setScalar(scale);
-        scene.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
-
-        globeMaterials.current = materials;
-        setGlobeScene(scene);
-      },
-      undefined,
-      () => {},
-    );
-
-    return () => {
-      disposed = true;
-      globeMaterials.current.forEach((material) => material.dispose());
-    };
-  }, []);
-
-  useFrame((state, dt) => {
-    activeTime.current = active ? activeTime.current + dt : 0;
-    const stageOpacity = fade.current;
-    const morph = smooth((activeTime.current - 1.05) / 2.2);
-    const alive = smooth((activeTime.current - 1.25) / 2.1);
-    const particleOpacity = smooth((activeTime.current - 0.95) / 1.2);
+  useFrame((state) => {
+    const opacity = fade.current;
+    const t = state.clock.elapsedTime;
 
     if (group.current) {
-      group.current.visible = stageOpacity > 0.01;
+      group.current.visible = opacity > 0.01;
       group.current.position.x = isWide ? 2.05 : 0;
       group.current.position.y = isWide ? 0.12 : -0.28;
       group.current.scale.setScalar(isWide ? 0.94 : 0.84);
-      group.current.scale.z = THREE.MathUtils.lerp(0.07, isWide ? 0.94 : 0.84, alive);
-      group.current.rotation.y = alive * (state.clock.elapsedTime * 0.26);
-      group.current.rotation.x = alive * Math.sin(state.clock.elapsedTime * 0.42) * 0.12;
+      group.current.rotation.y = t * 0.26;
+      group.current.rotation.x = Math.sin(t * 0.42) * 0.12;
     }
 
-    for (let i = 0; i < particles.count; i++) {
-      const wave = Math.sin(activeTime.current * 1.5 + i * 0.017) * 0.035;
-      particles.live[i * 3] =
-        particles.base[i * 3] + particles.scatter[i * 3] * morph + wave * morph;
-      particles.live[i * 3 + 1] =
-        particles.base[i * 3 + 1] + particles.scatter[i * 3 + 1] * morph;
-      particles.live[i * 3 + 2] =
-        particles.base[i * 3 + 2] + particles.scatter[i * 3 + 2] * morph;
+    // Update each particle position along its tilted circular orbit
+    for (let i = 0; i < ORBIT_COUNT; i++) {
+      const { tiltX, tiltZ, phase, speed, radius } = orbitData[i];
+      const angle = phase + t * speed;
+      // Base orbit in XZ plane, then tilt it
+      const cx = Math.cos(angle) * radius;
+      const cy = Math.sin(angle) * radius;
+      // Rotate around X axis by tiltX, then Z axis by tiltZ
+      const x = cx * Math.cos(tiltZ) - cy * Math.sin(tiltX) * Math.sin(tiltZ);
+      const y = cy * Math.cos(tiltX);
+      const z = cx * Math.sin(tiltZ) + cy * Math.sin(tiltX) * Math.cos(tiltZ);
+      orbitPos[i * 3]     = x;
+      orbitPos[i * 3 + 1] = y;
+      orbitPos[i * 3 + 2] = z;
     }
+    if (orbitGeo.current) orbitGeo.current.attributes.position.needsUpdate = true;
 
-    if (pointsGeometry.current) {
-      pointsGeometry.current.attributes.position.needsUpdate = true;
+    setOpacity(wireMat.current, opacity * 0.72);
+    if (orbitMat.current) {
+      orbitMat.current.opacity = opacity * 0.9;
+      orbitMat.current.needsUpdate = true;
     }
-    const modelOpacity = stageOpacity * (1 - morph);
-    globeMaterials.current.forEach((material) => setOpacity(material, modelOpacity));
-    setOpacity(fallbackMaterial.current, stageOpacity * (globeScene ? 0 : 1) * (1 - morph));
-    setOpacity(wireMaterial.current, stageOpacity * alive * (0.42 - morph * 0.28));
-    setOpacity(pointsMaterial.current, stageOpacity * particleOpacity * (0.2 + morph * 0.8));
   });
 
   return (
     <group ref={group}>
-      {globeScene && <primitive object={globeScene} />}
-      <mesh>
-        <sphereGeometry args={[1.8, 96, 48]} />
-        <meshBasicMaterial ref={fallbackMaterial} map={texture} toneMapped={false} transparent opacity={0} />
-      </mesh>
       <mesh>
         <sphereGeometry args={[1.815, 48, 24]} />
-        <meshBasicMaterial ref={wireMaterial} color="#efe5ca" wireframe />
+        <meshBasicMaterial ref={wireMat} color="#efe5ca" wireframe transparent opacity={0} depthWrite={false} />
       </mesh>
       <points>
-        <bufferGeometry ref={pointsGeometry}>
-          <bufferAttribute
-            attach="attributes-position"
-            array={particles.live}
-            count={particles.count}
-            itemSize={3}
-          />
-          <bufferAttribute
-            attach="attributes-color"
-            array={particles.colors}
-            count={particles.count}
-            itemSize={3}
-          />
+        <bufferGeometry ref={orbitGeo}>
+          <bufferAttribute attach="attributes-position" array={orbitPos} count={ORBIT_COUNT} itemSize={3} />
         </bufferGeometry>
         <pointsMaterial
-          ref={pointsMaterial}
-          size={0.028}
-          vertexColors
+          ref={orbitMat}
+          size={0.11}
+          color="#e7b160"
           sizeAttenuation
-          blending={THREE.AdditiveBlending}
+          transparent
+          depthWrite={false}
         />
       </points>
     </group>
@@ -336,7 +185,149 @@ function NormalizedPLY({
         vertexColors={normalized.hasColor}
         color={color}
         sizeAttenuation
-        blending={THREE.AdditiveBlending}
+        blending={normalized.hasColor ? THREE.NormalBlending : THREE.AdditiveBlending}
+      />
+    </points>
+  );
+}
+
+// Three.js's PLYLoader silently drops uchar colors when an alpha channel is
+// also present. This custom loader parses the binary header generically and
+// always extracts red/green/blue as a Float32 color attribute.
+class RGBAPLYLoader extends THREE.Loader {
+  load(url, onLoad, onProgress, onError) {
+    const fl = new THREE.FileLoader(this.manager);
+    fl.setResponseType("arraybuffer");
+    fl.load(url, (buf) => { try { onLoad(this.parse(buf)); } catch (e) { onError?.(e); } }, onProgress, onError);
+  }
+
+  parse(buffer) {
+    const bytes = new Uint8Array(buffer);
+    const dec = new TextDecoder();
+    const marker = "end_header\n";
+    let dataStart = -1;
+    for (let i = 0; i < 8192 && i + marker.length <= bytes.length; i++) {
+      if (dec.decode(bytes.subarray(i, i + marker.length)) === marker) { dataStart = i + marker.length; break; }
+    }
+    if (dataStart < 0) throw new Error("PLY: end_header not found");
+
+    const header = dec.decode(bytes.subarray(0, dataStart));
+    const vm = header.match(/element vertex (\d+)/);
+    if (!vm) throw new Error("PLY: no vertex element");
+    const count = parseInt(vm[1]);
+
+    const byteSize = { float: 4, double: 8, int: 4, uint: 4, short: 2, ushort: 2, uchar: 1 };
+    const props = [];
+    let inVtx = false;
+    for (const line of header.split("\n")) {
+      const l = line.trim();
+      if (l.startsWith("element vertex")) { inVtx = true; continue; }
+      if (l.startsWith("element ") && inVtx) break;
+      if (inVtx) {
+        const m = l.match(/^property (\S+) (\S+)/);
+        if (m && byteSize[m[1]] != null) props.push({ name: m[2], size: byteSize[m[1]], type: m[1] });
+      }
+    }
+
+    const offsets = {};
+    let off = 0;
+    for (const p of props) { offsets[p.name] = { off, type: p.type }; off += p.size; }
+    const stride = off;
+    const le = !header.includes("big_endian");
+
+    const pos  = new Float32Array(count * 3);
+    const norm = new Float32Array(count * 3);
+    const col  = new Float32Array(count * 3);
+    const hasN = "nx" in offsets;
+    const hasC = "red" in offsets && "green" in offsets && "blue" in offsets;
+
+    const view = new DataView(buffer, dataStart);
+    for (let i = 0; i < count; i++) {
+      const b = i * stride;
+      pos[i*3]   = view.getFloat32(b + offsets.x.off,  le);
+      pos[i*3+1] = view.getFloat32(b + offsets.y.off,  le);
+      pos[i*3+2] = view.getFloat32(b + offsets.z.off,  le);
+      if (hasN) {
+        norm[i*3]   = view.getFloat32(b + offsets.nx.off, le);
+        norm[i*3+1] = view.getFloat32(b + offsets.ny.off, le);
+        norm[i*3+2] = view.getFloat32(b + offsets.nz.off, le);
+      }
+      if (hasC) {
+        col[i*3]   = view.getUint8(b + offsets.red.off)   / 255;
+        col[i*3+1] = view.getUint8(b + offsets.green.off) / 255;
+        col[i*3+2] = view.getUint8(b + offsets.blue.off)  / 255;
+      }
+    }
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    if (hasN) geo.setAttribute("normal", new THREE.BufferAttribute(norm, 3));
+    if (hasC) geo.setAttribute("color",  new THREE.BufferAttribute(col, 3));
+    return geo;
+  }
+}
+
+function SolutionPLY({ active }) {
+  const source = useLoader(RGBAPLYLoader, presentationAssets.sourcePointCloud);
+  const points = useRef();
+  const mat = useRef();
+  const fade = useRef(0);
+  const activeTime = useRef(0);
+  const { viewport } = useThree();
+
+  const normalized = useMemo(() => {
+    const geometry = source.clone();
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(size);
+    geometry.translate(-center.x, -center.y, -center.z);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+    const hasColor = Boolean(geometry.getAttribute("color"));
+    return { geometry, scale: 7.0 / maxDim, hasColor };
+  }, [source]);
+
+  useEffect(() => () => normalized.geometry.dispose(), [normalized.geometry]);
+
+  useFrame((_, dt) => {
+    activeTime.current = active ? activeTime.current + dt : 0;
+    fade.current = fadeTo(fade.current, active ? 1 : 0, dt, 3.3);
+    const opacity = fade.current;
+    // slow continuous fly-through — always moving forward, no end point
+    const flySpeed = 0.1; // units per second through the cloud
+    const zOffset = activeTime.current * flySpeed;
+
+    if (points.current) {
+      points.current.visible = opacity > 0.01;
+      points.current.position.x = viewport.width > 6 ? 0 : 0;
+      points.current.position.y = 0.2;
+      // camera is at z=8, cloud center at z=0; start the cloud close so
+      // we're already inside it — pull it toward viewer continuously
+      points.current.position.z = 3 + zOffset;
+      // large scale so the cloud surrounds the camera
+      points.current.scale.setScalar(normalized.scale * 1.4);
+      points.current.rotation.set(0, 0, 0);
+    }
+    if (mat.current) {
+      mat.current.opacity = opacity * 0.97;
+      mat.current.needsUpdate = true;
+    }
+  });
+
+  return (
+    <points ref={points}>
+      <primitive object={normalized.geometry} attach="geometry" />
+      <pointsMaterial
+        ref={mat}
+        size={0.024}
+        // color must be white so vertex colors are not tinted
+        color="#ffffff"
+        vertexColors={normalized.hasColor}
+        sizeAttenuation
+        transparent
+        depthWrite={false}
       />
     </points>
   );
@@ -345,7 +336,7 @@ function NormalizedPLY({
 function SolutionMemory({ active }) {
   return (
     <Suspense fallback={<ProceduralCloud active={active} />}>
-      <NormalizedPLY active={active} path={presentationAssets.sourcePointCloud} />
+      <SolutionPLY active={active} />
     </Suspense>
   );
 }
@@ -703,9 +694,9 @@ export function Experience() {
       <pointLight position={[-3, -2, 5]} intensity={0.65} color="#8fbcb2" />
 
       <TitleGlobe active={slide === 0} />
+      <SolutionMemory active={slide === 2} />
       <PipelineScene active={slide === 3} />
       <StatsComputeField active={slide === 4} />
-      <CreditsField active={slide === 5} />
     </>
   );
 }

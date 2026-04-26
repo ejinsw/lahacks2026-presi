@@ -1,7 +1,6 @@
 import { Canvas } from "@react-three/fiber";
 import { MotionConfig } from "framer-motion";
 import { Experience } from "./components/Experience";
-import { GaussianSplatLayer } from "./components/GaussianSplatSlide";
 import { MediaLayer } from "./components/MediaLayer";
 import { Overlay } from "./components/Overlay";
 
@@ -18,7 +17,6 @@ function App() {
           <Experience />
         </Canvas>
         <MediaLayer />
-        <GaussianSplatLayer />
         <Overlay />
       </main>
     </MotionConfig>

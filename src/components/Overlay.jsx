@@ -112,9 +112,6 @@ export function Overlay() {
   return (
     <div className="deck-overlay">
       <header className="deck-header">
-        <button className="brand-mark" onClick={() => setSlide(0)} type="button">
-          Recall
-        </button>
         <div className="deck-count">
           {String(slide + 1).padStart(2, "0")} / {String(SLIDE_COUNT).padStart(2, "0")}
         </div>

@@ -3,12 +3,12 @@ import { useAtomValue } from "jotai";
 import { presentationAssets, slideAtom } from "../presentationState";
 
 const galleryItems = [
-  { type: "video", className: "wide", label: "home table" },
-  { type: "photo", className: "warm", label: "front room" },
-  { type: "photo", className: "cool", label: "street corner" },
-  { type: "video", className: "tall", label: "family clip" },
-  { type: "photo", className: "paper", label: "old print" },
-  { type: "photo", className: "green", label: "courtyard" },
+  { type: "video", className: "wide",  label: "Royce Hall",    src: "/videos/royce.mp4" },
+  { type: "video", className: "warm",  label: "point cloud",   src: "/videos/powell.mp4" },
+  { type: "video", className: "cool",  label: "ASUS GX10",     src: "/videos/asus.mp4" },
+  { type: "video", className: "tall",  label: "Henry",   src: "/videos/henry.mp4" },
+  { type: "video", className: "paper", label: "Bruin Bear",   src: "/videos/bruinbear.mp4" },
+  { type: "video", className: "green", label: "reconstructed", src: "/videos/excloud.mp4" },
 ];
 
 function MemoryGallery() {
@@ -29,7 +29,7 @@ function MemoryGallery() {
           transition={{ delay: index * 0.07, duration: 0.7 }}
         >
           {item.type === "video" ? (
-            <video src={presentationAssets.sourceVideo} autoPlay muted loop playsInline />
+            <video src={item.src} autoPlay muted loop playsInline />
           ) : (
             <div className="photo-memory" />
           )}
@@ -54,7 +54,18 @@ function ConversionSource() {
       exit={{ opacity: 0, scale: 0.97, filter: "blur(8px)" }}
       transition={{ duration: 4.4, times: [0, 0.22, 0.62, 1] }}
     >
-      <video src={presentationAssets.sourceVideo} autoPlay muted loop playsInline />
+      <video className="memory-video-base" src={presentationAssets.sourceVideo} autoPlay muted loop playsInline />
+      <motion.video
+        className="memory-video-replacement"
+        src={presentationAssets.cloudVideo}
+        autoPlay
+        muted
+        loop
+        playsInline
+        initial={{ opacity: 0, scale: 0.985 }}
+        animate={{ opacity: [0, 0, 0.84, 1], scale: [0.985, 0.99, 1, 1.015] }}
+        transition={{ duration: 4.4, times: [0, 0.28, 0.7, 1] }}
+      />
       <motion.div
         className="memory-video-scan"
         initial={{ x: "-120%" }}
@@ -86,19 +97,10 @@ function PipelineMedia() {
       <motion.div
         className="pipeline-output-frame"
         initial={{ opacity: 0, scale: 0.96 }}
-        animate={{
-          opacity: [0, 0.9, 0.54, 0.16],
-          scale: [0.96, 1, 0.995, 0.985],
-        }}
-        transition={{ delay: 0.45, duration: 4.2, times: [0, 0.28, 0.64, 1] }}
+        animate={{ opacity: 1, scale: 1 }}
+        transition={{ delay: 0.45, duration: 0.9 }}
       >
-        <video src={presentationAssets.pipelineVideo} autoPlay muted loop playsInline />
-        <motion.div
-          className="memory-video-scan"
-          initial={{ x: "-120%" }}
-          animate={{ x: "140%" }}
-          transition={{ delay: 0.4, duration: 1.8, repeat: Infinity, ease: "linear" }}
-        />
+        <video src={presentationAssets.cloudVideo} autoPlay muted loop playsInline />
       </motion.div>
     </motion.div>
   );
@@ -111,7 +113,6 @@ export function MediaLayer() {
     <div className="media-layer" aria-hidden="true">
       <AnimatePresence mode="wait">
         {slide === 1 && <MemoryGallery />}
-        {slide === 2 && <ConversionSource />}
         {slide === 3 && <PipelineMedia />}
       </AnimatePresence>
     </div>
