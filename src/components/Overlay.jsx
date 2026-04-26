@@ -91,6 +91,24 @@ function CreditsBlock() {
   );
 }
 
+function SideStat({ stat }) {
+  if (!stat) return null;
+
+  return (
+    <motion.aside
+      className="slide-side-stat"
+      initial={{ opacity: 0, x: 22 }}
+      animate={{ opacity: 1, x: 0 }}
+      transition={{ delay: 0.34, ...slideTransition }}
+    >
+      <strong>{stat.value}</strong>
+      <span>{stat.label}</span>
+      <small>{stat.source}</small>
+      <p>{stat.note}</p>
+    </motion.aside>
+  );
+}
+
 export function Overlay() {
   const [slide, setSlide] = useAtom(slideAtom);
   const current = slides[slide];
@@ -135,14 +153,16 @@ export function Overlay() {
           exit={{ opacity: 0 }}
           transition={slideTransition}
         >
-          <motion.p
-            className="eyebrow"
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05, ...slideTransition }}
-          >
-            {current.eyebrow}
-          </motion.p>
+          {current.eyebrow && (
+            <motion.p
+              className="eyebrow"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.05, ...slideTransition }}
+            >
+              {current.eyebrow}
+            </motion.p>
+          )}
           <motion.h1
             initial={{ opacity: 0, y: 14 }}
             animate={{ opacity: 1, y: 0 }}
@@ -150,25 +170,28 @@ export function Overlay() {
           >
             {current.title}
           </motion.h1>
-          <motion.p
-            className="slide-body"
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2, ...slideTransition }}
-          >
-            {current.body}
-          </motion.p>
+          {current.body && (
+            <motion.p
+              className="slide-body"
+              initial={{ opacity: 0, y: 14 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2, ...slideTransition }}
+            >
+              {current.body}
+            </motion.p>
+          )}
+          <SideStat stat={current.stat} />
 
-          {slide === 3 && <PipelineStrip />}
-          {slide === 4 && <StatsBlock />}
-          {slide === 5 && <CreditsBlock />}
+          {slide === 4 && <PipelineStrip />}
+          {slide === 5 && <StatsBlock />}
+          {slide === 6 && <CreditsBlock />}
         </motion.section>
       </AnimatePresence>
 
       <footer className="deck-progress">
         {slides.map((item, index) => (
           <button
-            key={item.eyebrow}
+            key={`${item.eyebrow || item.title}-${index}`}
             type="button"
             aria-label={`Go to slide ${index + 1}`}
             className={index === slide ? "is-active" : ""}

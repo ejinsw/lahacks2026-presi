@@ -614,7 +614,7 @@ function StatsComputeField({ active }) {
     const compact = viewport.width < 5;
     if (group.current) {
       group.current.visible = opacity > 0.01;
-      group.current.position.x = viewport.width > 6 ? 2.05 : 0;
+      group.current.position.x = viewport.width > 6 ? 2.75 : 0;
       group.current.position.y = compact ? -1.0 : -0.05;
       group.current.scale.setScalar(compact ? 0.78 : 1.1);
       group.current.rotation.y = Math.sin(state.clock.elapsedTime * 0.35) * 0.16;
@@ -694,9 +694,9 @@ export function Experience() {
       <pointLight position={[-3, -2, 5]} intensity={0.65} color="#8fbcb2" />
 
       <TitleGlobe active={slide === 0} />
-      <SolutionMemory active={slide === 2} />
-      <PipelineScene active={slide === 3} />
-      <StatsComputeField active={slide === 4} />
+      <SolutionMemory active={slide === 3} />
+      <PipelineScene active={slide === 4} />
+      <StatsComputeField active={slide === 5} />
     </>
   );
 }

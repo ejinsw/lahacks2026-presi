@@ -13,6 +13,7 @@ export const presentationAssets = {
   pipelinePointCloud: null,
   demo1: "/videos/demo1.mp4",
   demo2: "/videos/demo2.mp4",
+  displacementStat: "/images/unstat.png",
 };
 
 export const techStack = [
@@ -27,45 +28,63 @@ export const techStack = [
 ];
 
 export const computeStats = [
-  { value: "56 GB", label: "raw 1080p RGB for a 5-min scan at 30 FPS — 9,000 frames that a normal 8–24 GB GPU cannot hold alongside a live 3D map and active optimizer" },
-  { value: "128 GB unified", label: "GX10 memory keeps video stream, active Gaussian map, optimizer state, and local AI model fully resident on one machine with zero swapping" },
-  { value: "273 GB/s", label: "memory bandwidth — Gaussian Splatting is memory-bound as much as compute-bound; throughput determines how fast the scene can grow each keyframe" },
-  { value: "200B params", label: "local AI inference capacity on GX10 — run a vision-language model on the reconstructed space with no cloud upload of private video or geometry" },
+  {
+    value: "1 petaFLOP",
+    label: "MonoGS runs 10,000 optimization iterations per memory, refining millions of Gaussians. A petaFLOP turns a thirty-second video into a walkable scene in minutes — never in the cloud.",
+  },
+  {
+    value: "128 GB unified",
+    label: "SLAM tracking and Gaussian optimization share one memory pool. No PCIe shuffling between CPU and GPU — camera path and point cloud reconstruct in lockstep, on footage too large for a consumer GPU.",
+  },
+  {
+    value: "273 GB/s Bandwidth",
+    label: "Every iteration streams the full Gaussian field through memory. The bandwidth keeps optimization from stalling and ships the finished .ply to the browser the moment training ends.",
+  },
+  {
+    value: "200B params",
+    label: "The headroom Recall hasn't touched. Captioning, semantic search, voice narration — every future feature stays on the GX10. Your memories never leave the device.",
+  },
 ];
 
 export const slides = [
   {
-    eyebrow: "Recall",
+    eyebrow: "",
     title: "Recall",
-    body: "Regenerating memory as a place you can move through.",
+    body: "Regenerating places and memories.",
     tone: "title",
   },
   {
     eyebrow: "The Problem",
-    title: "Memories are more than videos.",
+    title: "Every day, 37k+ people are newly displaced.",
     body:
-      "For refugees forced to flee home, photos and videos may be the only record left. But a single clip only preserves one narrow path. A place is remembered through many angles, people, rooms, sounds, and fragments held by different perspectives.",
-    tone: "problem",
+      "Each leaves behind a room, a street, a neighborhood that they cling to with pictures and videos.",
+    tone: "problem-wide",
+  },
+  {
+    eyebrow: "",
+    title: "But memories are more than videos.",
+    body: "",
+    tone: "problem-gallery",
   },
   {
     eyebrow: "The Solution",
-    title: "Expanding with GenAI.",
+    title: "They're places.",
     body:
-      "Recall turns a 2D photo or video into a 3D point cloud that can be revisited from different perspectives. The memory stops being locked to the original camera and starts behaving like a place.",
+  "Recall transforms 2D video into navigable 3D environments, enabling users to revisit moments from any perspective. Memories become immersive, spatial experiences grounded in familiar places.",
     tone: "solution",
   },
   {
-    eyebrow: "Process",
-    title: "Video enters GX10. A place comes back.",
+    eyebrow: "The Process",
+    title: "Gaussian Splatting powered by 1 petaFLOP of AI compute.",
     body:
-      "The source capture feeds into ASUS AI compute, MonoGS reconstructs the camera path and scene geometry, and the video fades into the generated point cloud in the same spatial position.",
+      "",
     tone: "process",
   },
   {
     eyebrow: "Compute",
-    title: "One machine. Full pipeline.",
+    title: "Made possible by ASUS Ascent GX10.",
     body:
-      "At 1080p and 30 FPS, a 5-minute scan produces 9,000 frames and roughly 56 GB of raw RGB data. MonoGS tracks the camera, optimizes a growing 3D Gaussian map, and renders the scene — while the GX10's 128 GB unified memory, 273 GB/s bandwidth, and Blackwell GPU keep the full pipeline local. No cloud. No latency. No privacy trade-off.",
+      "",
     tone: "stats",
   },
   {

@@ -39,6 +39,22 @@ function MemoryGallery() {
   );
 }
 
+function ProblemStatImage() {
+  return (
+    <div key="problem-stat-image" className="problem-stat-image">
+      <motion.div
+        className="problem-stat-image-card"
+        initial={{ opacity: 0, x: 28, scale: 0.96, filter: "blur(10px)" }}
+        animate={{ opacity: 1, x: 0, scale: 1, filter: "blur(0px)" }}
+        exit={{ opacity: 0, x: 18, scale: 0.98, filter: "blur(8px)" }}
+        transition={{ duration: 0.82, ease: [0.22, 1, 0.36, 1] }}
+      >
+        <img src={presentationAssets.displacementStat} alt="" />
+      </motion.div>
+    </div>
+  );
+}
+
 function ConversionSource() {
   return (
     <motion.div
@@ -111,8 +127,9 @@ export function MediaLayer() {
   return (
     <div className="media-layer" aria-hidden="true">
       <AnimatePresence mode="wait">
-        {slide === 1 && <MemoryGallery />}
-        {slide === 3 && <PipelineMedia />}
+        {slide === 1 && <ProblemStatImage />}
+        {slide === 2 && <MemoryGallery />}
+        {slide === 4 && <PipelineMedia />}
       </AnimatePresence>
     </div>
   );

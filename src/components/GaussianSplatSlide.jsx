@@ -6,7 +6,7 @@ import * as GaussianSplats3D from "@mkkellogg/gaussian-splats-3d";
 import { presentationAssets, slideAtom } from "../presentationState";
 
 function getMode(slide) {
-  if (slide === 2) {
+  if (slide === 3) {
     return {
       className: "is-conversion",
       path: presentationAssets.sourcePointCloud,
@@ -19,7 +19,7 @@ function getMode(slide) {
     };
   }
 
-  if (slide === 3) {
+  if (slide === 4) {
     return {
       className: "is-pipeline",
       path: presentationAssets.pipelinePointCloud,
