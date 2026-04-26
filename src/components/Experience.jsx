@@ -1,554 +1,711 @@
-import { useRef, useMemo, useEffect, useState, Suspense, useCallback } from "react";
-import { useFrame, useThree, useLoader } from "@react-three/fiber";
-import {
-  CameraControls,
-  Environment,
-  Float,
-  Html,
-  MeshDistortMaterial,
-  MeshTransmissionMaterial,
-  RoundedBox,
-  Stars,
-} from "@react-three/drei";
-import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader";
-import { useAtom } from "jotai";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useAtomValue } from "jotai";
+import { useFrame, useLoader, useThree } from "@react-three/fiber";
 import * as THREE from "three";
-import { slideAtom } from "./Overlay";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader";
+import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader";
+import { presentationAssets, slideAtom } from "../presentationState";
 
-// ── Shaders (inspired by LAHacks particle.vert/.frag) ────────────────────────
-//
-// PLY raw point clouds: reads the `color` vertex attribute baked by PLYLoader.
-// Procedural clouds:    same shader, colors supplied as a per-vertex attribute.
-// Both produce circular, soft-edge, perspective-correct splats.
+const fadeTo = (current, target, dt, speed = 4.5) =>
+  THREE.MathUtils.damp(current, target, speed, dt);
 
-const PLY_VERT = /* glsl */`
-precision highp float;
-attribute vec3 color;
-uniform float uSize;
-varying vec3 vColor;
+const smooth = (value) => {
+  const x = THREE.MathUtils.clamp(value, 0, 1);
+  return x * x * (3 - 2 * x);
+};
 
-void main() {
-  vColor = color;
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_PointSize = uSize * (300.0 / -mv.z);
-  gl_Position  = projectionMatrix * mv;
-}`;
+function useStageFade(active, speed = 4.5) {
+  const fade = useRef(active ? 1 : 0);
+  useFrame((_, dt) => {
+    fade.current = fadeTo(fade.current, active ? 1 : 0, dt, speed);
+  });
+  return fade;
+}
 
-const PLY_FRAG = /* glsl */`
-precision highp float;
-varying vec3 vColor;
+function setOpacity(material, opacity) {
+  if (!material) return;
+  material.transparent = true;
+  material.opacity = opacity;
+  material.depthWrite = false;
+  material.needsUpdate = true;
+}
 
-void main() {
-  vec2  uv   = gl_PointCoord * 2.0 - 1.0;
-  float dist = length(uv);
-  if (dist > 1.0) discard;
-  float alpha = 1.0 - smoothstep(0.35, 1.0, dist);
-  gl_FragColor = vec4(vColor, alpha * 0.94);
-}`;
+function makeGlobeTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext("2d");
 
-// Procedural particles get a soft inner glow, matching LAHacks' "uColor + 0.3" trick
-const PARTICLE_FRAG = /* glsl */`
-precision highp float;
-varying vec3 vColor;
+  ctx.fillStyle = "#102027";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-void main() {
-  vec2  uv   = gl_PointCoord * 2.0 - 1.0;
-  float dist = length(uv);
-  if (dist > 1.0) discard;
-  float core  = 1.0 - smoothstep(0.0, 0.45, dist);
-  float halo  = 1.0 - smoothstep(0.3, 1.0,  dist);
-  float alpha = halo * 0.82 + core * 0.18;
-  gl_FragColor = vec4(vColor + core * 0.3, alpha);
-}`;
+  ctx.strokeStyle = "rgba(238, 229, 202, 0.14)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= canvas.width; x += 64) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvas.height);
+    ctx.stroke();
+  }
+  for (let y = 32; y <= canvas.height; y += 64) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  }
 
-// ── PLY point cloud ───────────────────────────────────────────────────────────
-function PLYPointCloud({ path, size = 0.15, fallbackColor = "#aaaaaa", ...groupProps }) {
-  const geometry = useLoader(PLYLoader, path);
+  const land = [
+    [[120, 170], [170, 112], [250, 130], [286, 190], [262, 248], [204, 260], [136, 226]],
+    [[250, 270], [320, 256], [360, 318], [338, 420], [280, 472], [236, 398]],
+    [[470, 152], [530, 106], [628, 124], [660, 190], [610, 234], [510, 220]],
+    [[570, 228], [654, 244], [694, 320], [652, 412], [574, 392], [542, 310]],
+    [[682, 140], [820, 118], [912, 176], [886, 262], [768, 248], [704, 202]],
+    [[780, 308], [858, 300], [922, 354], [892, 420], [798, 410]],
+  ];
 
-  const scale = useMemo(() => {
-    geometry.computeBoundingBox();
-    const dim = new THREE.Vector3();
-    geometry.boundingBox.getSize(dim);
-    const maxDim = Math.max(dim.x, dim.y, dim.z);
-    geometry.center();
-    return 7.5 / maxDim;
-  }, [geometry]);
-
-  const material = useMemo(() => {
-    const hasColor = Boolean(geometry.attributes.color);
-    if (hasColor) {
-      return new THREE.ShaderMaterial({
-        vertexShader:   PLY_VERT,
-        fragmentShader: PLY_FRAG,
-        uniforms: { uSize: { value: size } },
-        transparent: true,
-        depthWrite:  false,
-      });
-    }
-    // Fallback: solid-color circles
-    return new THREE.ShaderMaterial({
-      vertexShader: `
-        precision highp float;
-        uniform float uSize;
-        void main() {
-          vec4 mv = modelViewMatrix * vec4(position,1.0);
-          gl_PointSize = uSize * (300.0 / -mv.z);
-          gl_Position  = projectionMatrix * mv;
-        }`,
-      fragmentShader: `
-        precision highp float;
-        uniform vec3 uFallback;
-        void main() {
-          vec2 uv = gl_PointCoord*2.0-1.0;
-          if(length(uv)>1.0) discard;
-          float a = 1.0-smoothstep(0.35,1.0,length(uv));
-          gl_FragColor = vec4(uFallback,a*0.9);
-        }`,
-      uniforms: {
-        uSize:     { value: size },
-        uFallback: { value: new THREE.Color(fallbackColor) },
-      },
-      transparent: true,
-      depthWrite: false,
+  land.forEach((poly, index) => {
+    ctx.beginPath();
+    poly.forEach(([x, y], i) => {
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
     });
-  }, [geometry, size, fallbackColor]);
+    ctx.closePath();
+    ctx.fillStyle = index % 2 === 0 ? "#d6d2aa" : "#9ebf9e";
+    ctx.fill();
+  });
+
+  ctx.fillStyle = "rgba(236, 150, 86, 0.62)";
+  ctx.beginPath();
+  ctx.arc(575, 260, 13, 0, Math.PI * 2);
+  ctx.fill();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+function makeGlobeParticles(count = 3600) {
+  const base = new Float32Array(count * 3);
+  const live = new Float32Array(count * 3);
+  const colors = new Float32Array(count * 3);
+  const scatter = new Float32Array(count * 3);
+
+  for (let i = 0; i < count; i++) {
+    const y = 1 - (i / (count - 1)) * 2;
+    const radius = Math.sqrt(Math.max(0, 1 - y * y));
+    const theta = i * Math.PI * (3 - Math.sqrt(5));
+    const x = Math.cos(theta) * radius;
+    const z = Math.sin(theta) * radius;
+    const lat = Math.asin(y);
+    const lon = Math.atan2(z, x);
+    const land =
+      Math.sin(lon * 2.3 + lat * 4.1) + Math.cos(lon * 5.1 - lat * 1.8) > 0.68;
+    const color = new THREE.Color(land ? "#e0d8a6" : "#77b2b3");
+    const jitter = 0.78 + Math.random() * 0.22;
+
+    base[i * 3] = x * 1.82;
+    base[i * 3 + 1] = y * 1.82;
+    base[i * 3 + 2] = z * 1.82;
+    live[i * 3] = base[i * 3];
+    live[i * 3 + 1] = base[i * 3 + 1];
+    live[i * 3 + 2] = base[i * 3 + 2];
+    colors[i * 3] = color.r * jitter;
+    colors[i * 3 + 1] = color.g * jitter;
+    colors[i * 3 + 2] = color.b * jitter;
+    scatter[i * 3] = x * (0.12 + Math.random() * 0.48) + (Math.random() - 0.5) * 0.22;
+    scatter[i * 3 + 1] = y * (0.12 + Math.random() * 0.48) + (Math.random() - 0.5) * 0.22;
+    scatter[i * 3 + 2] = z * (0.12 + Math.random() * 0.48) + (Math.random() - 0.5) * 0.22;
+  }
+
+  return { base, live, colors, scatter, count };
+}
+
+function TitleGlobe({ active }) {
+  const { viewport } = useThree();
+  const group = useRef();
+  const fallbackMaterial = useRef();
+  const wireMaterial = useRef();
+  const pointsMaterial = useRef();
+  const pointsGeometry = useRef();
+  const globeMaterials = useRef([]);
+  const activeTime = useRef(0);
+  const [globeScene, setGlobeScene] = useState(null);
+  const fade = useStageFade(active, 4.6);
+  const texture = useMemo(() => makeGlobeTexture(), []);
+  const particles = useMemo(() => makeGlobeParticles(), []);
+  const isWide = viewport.width > 6.2;
+
+  useEffect(() => () => texture.dispose(), [texture]);
+
+  useEffect(() => {
+    let disposed = false;
+    const loader = new GLTFLoader();
+
+    loader.load(
+      presentationAssets.globeModel,
+      (gltf) => {
+        if (disposed) return;
+        const scene = gltf.scene;
+        const materials = [];
+
+        scene.traverse((child) => {
+          if (!child.isMesh) return;
+          const existing = child.material;
+          const map = Array.isArray(existing) ? existing[0]?.map : existing?.map;
+          const material = new THREE.MeshBasicMaterial({
+            color: map ? "#ffffff" : "#d9d2aa",
+            map: map ?? null,
+            transparent: true,
+            opacity: 0,
+            toneMapped: false,
+            depthWrite: false,
+          });
+          child.material = material;
+          child.renderOrder = 1;
+          materials.push(material);
+        });
+
+        scene.updateMatrixWorld(true);
+        const box = new THREE.Box3().setFromObject(scene);
+        const center = new THREE.Vector3();
+        const size = new THREE.Vector3();
+        box.getCenter(center);
+        box.getSize(size);
+        const scale = 3.65 / (Math.max(size.x, size.y, size.z) || 1);
+        scene.scale.setScalar(scale);
+        scene.position.set(-center.x * scale, -center.y * scale, -center.z * scale);
+
+        globeMaterials.current = materials;
+        setGlobeScene(scene);
+      },
+      undefined,
+      () => {},
+    );
+
+    return () => {
+      disposed = true;
+      globeMaterials.current.forEach((material) => material.dispose());
+    };
+  }, []);
+
+  useFrame((state, dt) => {
+    activeTime.current = active ? activeTime.current + dt : 0;
+    const stageOpacity = fade.current;
+    const morph = smooth((activeTime.current - 1.05) / 2.2);
+    const alive = smooth((activeTime.current - 1.25) / 2.1);
+    const particleOpacity = smooth((activeTime.current - 0.95) / 1.2);
+
+    if (group.current) {
+      group.current.visible = stageOpacity > 0.01;
+      group.current.position.x = isWide ? 2.05 : 0;
+      group.current.position.y = isWide ? 0.12 : -0.28;
+      group.current.scale.setScalar(isWide ? 0.94 : 0.84);
+      group.current.scale.z = THREE.MathUtils.lerp(0.07, isWide ? 0.94 : 0.84, alive);
+      group.current.rotation.y = alive * (state.clock.elapsedTime * 0.26);
+      group.current.rotation.x = alive * Math.sin(state.clock.elapsedTime * 0.42) * 0.12;
+    }
+
+    for (let i = 0; i < particles.count; i++) {
+      const wave = Math.sin(activeTime.current * 1.5 + i * 0.017) * 0.035;
+      particles.live[i * 3] =
+        particles.base[i * 3] + particles.scatter[i * 3] * morph + wave * morph;
+      particles.live[i * 3 + 1] =
+        particles.base[i * 3 + 1] + particles.scatter[i * 3 + 1] * morph;
+      particles.live[i * 3 + 2] =
+        particles.base[i * 3 + 2] + particles.scatter[i * 3 + 2] * morph;
+    }
+
+    if (pointsGeometry.current) {
+      pointsGeometry.current.attributes.position.needsUpdate = true;
+    }
+    const modelOpacity = stageOpacity * (1 - morph);
+    globeMaterials.current.forEach((material) => setOpacity(material, modelOpacity));
+    setOpacity(fallbackMaterial.current, stageOpacity * (globeScene ? 0 : 1) * (1 - morph));
+    setOpacity(wireMaterial.current, stageOpacity * alive * (0.42 - morph * 0.28));
+    setOpacity(pointsMaterial.current, stageOpacity * particleOpacity * (0.2 + morph * 0.8));
+  });
 
   return (
-    <group scale={scale} {...groupProps}>
+    <group ref={group}>
+      {globeScene && <primitive object={globeScene} />}
+      <mesh>
+        <sphereGeometry args={[1.8, 96, 48]} />
+        <meshBasicMaterial ref={fallbackMaterial} map={texture} toneMapped={false} transparent opacity={0} />
+      </mesh>
+      <mesh>
+        <sphereGeometry args={[1.815, 48, 24]} />
+        <meshBasicMaterial ref={wireMaterial} color="#efe5ca" wireframe />
+      </mesh>
       <points>
-        <primitive object={geometry} attach="geometry" />
-        <primitive object={material} attach="material" />
+        <bufferGeometry ref={pointsGeometry}>
+          <bufferAttribute
+            attach="attributes-position"
+            array={particles.live}
+            count={particles.count}
+            itemSize={3}
+          />
+          <bufferAttribute
+            attach="attributes-color"
+            array={particles.colors}
+            count={particles.count}
+            itemSize={3}
+          />
+        </bufferGeometry>
+        <pointsMaterial
+          ref={pointsMaterial}
+          size={0.028}
+          vertexColors
+          sizeAttenuation
+          blending={THREE.AdditiveBlending}
+        />
       </points>
     </group>
   );
 }
 
-// ── Procedural particle cloud ─────────────────────────────────────────────────
-function ParticleCloud({ count = 8000, color = "#ffffff", shape = "sphere", size = 1.2, spread = 2 }) {
-  const { positions, colors } = useMemo(() => {
-    const pos = new Float32Array(count * 3);
-    const col = new Float32Array(count * 3);
-    const c = new THREE.Color(color);
-    for (let i = 0; i < count; i++) {
-      let x = 0, y = 0, z = 0;
-      if (shape === "sphere") {
-        const phi = Math.acos(2 * Math.random() - 1);
-        const theta = 2 * Math.PI * Math.random();
-        const r = spread * (0.5 + 0.5 * Math.random());
-        x = r * Math.sin(phi) * Math.cos(theta);
-        y = r * Math.sin(phi) * Math.sin(theta);
-        z = r * Math.cos(phi);
-      } else if (shape === "scattered") {
-        x = (Math.random() - 0.5) * spread * 3;
-        y = (Math.random() - 0.5) * spread * 2.5;
-        z = (Math.random() - 0.5) * spread * 3;
-      } else if (shape === "room") {
-        const face = Math.floor(Math.random() * 5);
-        if      (face===0){x=(Math.random()-.5)*spread*2;y=-spread*.6;z=(Math.random()-.5)*spread*2;}
-        else if (face===1){x=(Math.random()-.5)*spread*2;y= spread*.6;z=(Math.random()-.5)*spread*2;}
-        else if (face===2){x=-spread;y=(Math.random()-.5)*spread*1.2;z=(Math.random()-.5)*spread*2;}
-        else if (face===3){x= spread;y=(Math.random()-.5)*spread*1.2;z=(Math.random()-.5)*spread*2;}
-        else              {x=(Math.random()-.5)*spread*2;y=(Math.random()-.5)*spread*1.2;z=-spread;}
-      } else if (shape === "flat") {
-        x = (Math.random() - 0.5) * spread * 3.5;
-        y = (Math.random() - 0.5) * 0.08 + Math.sin(i * 0.05) * 0.12;
-        z = (Math.random() - 0.5) * spread * 2.5;
-      }
-      pos[i*3]=x; pos[i*3+1]=y; pos[i*3+2]=z;
-      const v = 0.55 + Math.random() * 0.45;
-      col[i*3]=c.r*v; col[i*3+1]=c.g*v; col[i*3+2]=c.b*v;
-    }
-    return { positions: pos, colors: col };
-  }, [count, color, shape, spread]);
+function NormalizedPLY({
+  active,
+  path,
+  fit = 4.4,
+  size = 0.017,
+  color = "#d7b36a",
+  placement = "solution",
+  opacityScale = 1,
+  delay = 0,
+}) {
+  const source = useLoader(PLYLoader, path);
+  const points = useRef();
+  const material = useRef();
+  const fade = useRef(0);
+  const activeTime = useRef(0);
+  const { viewport } = useThree();
 
-  const material = useMemo(() => new THREE.ShaderMaterial({
-    vertexShader:   PLY_VERT,
-    fragmentShader: PARTICLE_FRAG,
-    uniforms: { uSize: { value: size } },
-    transparent: true,
-    depthWrite:  false,
-    blending:    THREE.AdditiveBlending,
-  }), [size]);
-
-  return (
-    <points>
-      <bufferGeometry>
-        <bufferAttribute attach="attributes-position" array={positions} count={count} itemSize={3} />
-        <bufferAttribute attach="attributes-color"    array={colors}    count={count} itemSize={3} />
-      </bufferGeometry>
-      <primitive object={material} attach="material" />
-    </points>
-  );
-}
-
-// ── Slide 0 · Title ─ Tokyo Alleyway PLY ─────────────────────────────────────
-function Slide0({ offset }) {
-  const ref = useRef();
-  useFrame((s) => { if (ref.current) ref.current.rotation.y = s.clock.elapsedTime * 0.01; });
-  return (
-    <group position={[offset, 0, 0]}>
-      <group ref={ref}>
-        <Suspense fallback={<ParticleCloud count={14000} color="#c8b89a" shape="scattered" size={1.0} spread={3.5} />}>
-          <PLYPointCloud path="/models/TokyoAlleyway1_500k.ply" size={0.14} />
-        </Suspense>
-      </group>
-      <pointLight position={[0,3,4]} intensity={1.4} color="#f97316" distance={10} />
-      <pointLight position={[-2,-1,3]} intensity={0.7} color="#a855f7" distance={8} />
-    </group>
-  );
-}
-
-// ── Slide 1 · Problem ─ example.mp4 floating rectangle ───────────────────────
-function VideoPlane() {
-  const [aspect, setAspect] = useState(16 / 9);
-
-  const texture = useMemo(() => {
-    const vid = document.createElement("video");
-    vid.src = "/videos/example.mp4";
-    vid.loop = true;
-    vid.muted = true;
-    vid.playsInline = true;
-    vid.play().catch(() => {});
-    const tex = new THREE.VideoTexture(vid);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    return tex;
-  }, []);
-
-  useEffect(() => {
-    const vid = texture.image;
-    const onMeta = () => {
-      if (vid.videoWidth && vid.videoHeight)
-        setAspect(vid.videoWidth / vid.videoHeight);
+  const normalized = useMemo(() => {
+    const geometry = source.clone();
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    const center = new THREE.Vector3();
+    const dimensions = new THREE.Vector3();
+    box.getCenter(center);
+    box.getSize(dimensions);
+    geometry.translate(-center.x, -center.y, -center.z);
+    const maxDim = Math.max(dimensions.x, dimensions.y, dimensions.z) || 1;
+    return {
+      geometry,
+      scale: fit / maxDim,
+      hasColor: Boolean(geometry.getAttribute("color")),
     };
-    vid.addEventListener("loadedmetadata", onMeta);
-    if (vid.readyState >= 1) onMeta();
-    return () => {
-      vid.removeEventListener("loadedmetadata", onMeta);
-      vid.pause();
-      texture.dispose();
-    };
-  }, [texture]);
+  }, [source, fit]);
 
-  const w = 6.2, h = w / aspect;
-  return (
-    <group>
-      <mesh position={[0, 0, -0.05]}>
-        <planeGeometry args={[w + 1.2, h + 1.2]} />
-        <meshBasicMaterial color="#000000" />
-      </mesh>
-      <mesh position={[0, 0, -0.02]}>
-        <planeGeometry args={[w + 0.08, h + 0.08]} />
-        <meshBasicMaterial color="#1a1a1a" />
-      </mesh>
-      <mesh>
-        <planeGeometry args={[w, h]} />
-        <meshBasicMaterial map={texture} toneMapped={false} />
-      </mesh>
-    </group>
-  );
-}
-
-function Slide1({ offset }) {
-  return (
-    <group position={[offset, 0, 0]}>
-      <VideoPlane />
-      <pointLight position={[0, 3, 5]} intensity={0.25} color="#ffffff" distance={8} />
-    </group>
-  );
-}
-
-// ── Slide 2 · Use Case ─ GaussianSplatSlide overlay handles this ──────────────
-function Slide2({ offset }) {
-  return <group position={[offset, 0, 0]} />;
-}
-
-// ── Slide 3 · Pipeline ─ sequential animated reveal ───────────────────────────
-function ParticleStream({ from, to, count = 200, color = "#a855f7" }) {
-  const geo = useRef();
-  const pos = useMemo(() => new Float32Array(count * 3), [count]);
-  const streamMat = useMemo(() => new THREE.ShaderMaterial({
-    vertexShader:   PLY_VERT,
-    fragmentShader: PARTICLE_FRAG,
-    uniforms: { uSize: { value: 1.2 } },
-    transparent: true,
-    depthWrite:  false,
-    blending:    THREE.AdditiveBlending,
-  }), []);
-  const streamColors = useMemo(() => {
-    const c = new THREE.Color(color);
-    const col = new Float32Array(count * 3);
-    for (let i = 0; i < count; i++) { col[i*3]=c.r; col[i*3+1]=c.g; col[i*3+2]=c.b; }
-    return col;
-  }, [count, color]);
-
-  useFrame((s) => {
-    const t = s.clock.elapsedTime;
-    for (let i = 0; i < count; i++) {
-      const p = ((t * 0.45 + i / count) % 1);
-      pos[i*3]  =from[0]+(to[0]-from[0])*p;
-      pos[i*3+1]=from[1]+(to[1]-from[1])*p+Math.sin(p*Math.PI)*0.3;
-      pos[i*3+2]=from[2]+(to[2]-from[2])*p;
-    }
-    if (geo.current) geo.current.attributes.position.needsUpdate = true;
-  });
-
-  return (
-    <points>
-      <bufferGeometry ref={geo}>
-        <bufferAttribute attach="attributes-position" array={pos}          count={count} itemSize={3} />
-        <bufferAttribute attach="attributes-color"    array={streamColors} count={count} itemSize={3} />
-      </bufferGeometry>
-      <primitive object={streamMat} attach="material" />
-    </points>
-  );
-}
-
-const NX = [-5.2, -1.8, 1.8, 5.2];
-const lbl = (color) => ({
-  color, fontSize:"11px", fontWeight:700, fontFamily:"sans-serif",
-  background:"rgba(0,0,0,0.75)", padding:"3px 9px", borderRadius:"4px",
-  letterSpacing:"0.08em", pointerEvents:"none", whiteSpace:"nowrap",
-});
-
-// Spring-like overshoot: starts at 0, overshoots ~1.1, settles at 1
-function springScale(p) {
-  if (p <= 0) return 0;
-  if (p >= 1) return 1;
-  return 1 - Math.exp(-8 * p) * Math.cos(8 * p);
-}
-
-const PIPELINE_SLIDE = 3;
-
-function Slide3({ offset }) {
-  const [slide] = useAtom(slideAtom);
-  const isActive = slide === PIPELINE_SLIDE;
-
-  // stepState drives conditional JSX (stream mounts); stepRef is read in useFrame
-  const [stepState, setStepState] = useState(-1);
-  const stepRef  = useRef(-1);
-  const progress = useRef([0, 0, 0, 0]);
-
-  const ref0 = useRef(), ref1 = useRef(), ref2 = useRef(), ref3 = useRef();
-  const nodeRefs = [ref0, ref1, ref2, ref3];
-
-  const advance = useCallback((n) => {
-    stepRef.current = n;
-    setStepState(n);
-  }, []);
-
-  useEffect(() => {
-    if (!isActive) {
-      advance(-1);
-      progress.current = [0, 0, 0, 0];
-      nodeRefs.forEach(r => { if (r.current) r.current.scale.setScalar(0); });
-      return;
-    }
-    advance(0);
-    const t1 = setTimeout(() => advance(1), 2200);
-    const t2 = setTimeout(() => advance(2), 4400);
-    const t3 = setTimeout(() => advance(3), 6600);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [isActive]);
+  useEffect(() => () => normalized.geometry.dispose(), [normalized.geometry]);
 
   useFrame((_, dt) => {
-    const s = stepRef.current;
-    for (let i = 0; i < 4; i++) {
-      if (s >= i) progress.current[i] = Math.min(1, progress.current[i] + dt * 1.6);
-      const sc = springScale(progress.current[i]);
-      if (nodeRefs[i].current) nodeRefs[i].current.scale.setScalar(sc);
+    activeTime.current = active ? activeTime.current + dt : 0;
+    const delayedActive = active && activeTime.current >= delay;
+    fade.current = fadeTo(fade.current, delayedActive ? 1 : 0, dt, 3.3);
+    const opacity = fade.current;
+    const wide = viewport.width > 6;
+    const compact = viewport.width < 5;
+    const zoom = smooth((activeTime.current - delay) / 2.4);
+    if (points.current) {
+      points.current.visible = opacity > 0.01;
+      if (placement === "process") {
+        points.current.position.x = wide ? 2.55 : 0.7;
+        points.current.position.y = compact ? -0.92 : -0.04;
+        points.current.position.z = 0;
+        points.current.scale.setScalar(normalized.scale * 0.46 * (0.94 + zoom * 0.08));
+      } else {
+        points.current.position.x = wide ? 1.55 : 0;
+        points.current.position.y = compact ? 0.78 : wide ? 0.08 : -0.36;
+        points.current.position.z = 0;
+        points.current.scale.setScalar(normalized.scale * (compact ? 0.6 : 1) * (0.95 + zoom * 0.08));
+      }
+      points.current.rotation.y = THREE.MathUtils.lerp(-0.22, 0.08, zoom);
+      points.current.rotation.x = THREE.MathUtils.lerp(0.04, -0.04, zoom);
     }
+    setOpacity(material.current, opacity * 0.96 * opacityScale);
   });
 
   return (
-    <group position={[offset, 0, 0]}>
-      <Environment preset="city" />
-
-      {/* Phone */}
-      <group ref={ref0} position={[NX[0],0,0]} scale={0}>
-        <mesh><boxGeometry args={[0.55,1.15,0.09]} />
-          <meshStandardMaterial color="#1e3a8a" metalness={0.3} roughness={0.3} emissive="#3b82f6" emissiveIntensity={0.5} />
-        </mesh>
-        <mesh position={[0,0.08,0.051]}><planeGeometry args={[0.44,0.72]} />
-          <meshStandardMaterial color="#0f172a" emissive="#38bdf8" emissiveIntensity={0.25} />
-        </mesh>
-        <mesh position={[0,-0.43,0.051]}><circleGeometry args={[0.035,20]} />
-          <meshStandardMaterial color="#60a5fa" emissive="#60a5fa" emissiveIntensity={0.5} />
-        </mesh>
-        <Html center position={[0,-1.1,0]} distanceFactor={10}><div style={lbl("#93c5fd")}>PHONE</div></Html>
-      </group>
-
-      {/* Web */}
-      <group ref={ref1} position={[NX[1],0,0]} scale={0}>
-        <mesh><boxGeometry args={[1.0,1.0,1.0]} />
-          <MeshTransmissionMaterial backside samples={4} thickness={0.45} roughness={0.03} transmission={0.93} ior={1.5} chromaticAberration={0.06} color="#c0ffe1" />
-        </mesh>
-        <Html center position={[0,-1.1,0]} distanceFactor={10}><div style={lbl("#86efac")}>WEB APP</div></Html>
-      </group>
-
-      {/* GX10 */}
-      <group ref={ref2} position={[NX[2],0,0]} scale={0}>
-        <GX10Box scale={0.72} />
-        <Html center position={[0,-1.1,0]} distanceFactor={10}><div style={lbl("#fbbf24")}>GX10</div></Html>
-      </group>
-
-      {/* Splat */}
-      <group ref={ref3} position={[NX[3],0,0]} scale={0}>
-        <Float speed={0.6} floatIntensity={0.3}>
-          <ParticleCloud count={4000} color="#f9c0ff" shape="sphere" size={1.4} spread={0.9} />
-        </Float>
-        <Html center position={[0,-1.1,0]} distanceFactor={10}><div style={lbl("#f0abfc")}>3D SPLAT</div></Html>
-      </group>
-
-      {/* Streams mount only after the upstream node is fully visible */}
-      {stepState >= 1 && <ParticleStream from={[NX[0]+0.42,0,0]} to={[NX[1]-0.55,0,0]} color="#60a5fa" />}
-      {stepState >= 2 && <ParticleStream from={[NX[1]+0.55,0,0]} to={[NX[2]-0.65,0,0]} color="#a855f7" />}
-      {stepState >= 3 && <ParticleStream from={[NX[2]+0.65,0,0]} to={[NX[3]-0.92,0,0]} color="#f0abfc" />}
-    </group>
+    <points ref={points}>
+      <primitive object={normalized.geometry} attach="geometry" />
+      <pointsMaterial
+        ref={material}
+        size={size}
+        vertexColors={normalized.hasColor}
+        color={color}
+        sizeAttenuation
+        blending={THREE.AdditiveBlending}
+      />
+    </points>
   );
 }
 
-// ── GX10 primitive ────────────────────────────────────────────────────────────
-function GX10Box({ scale = 1, pulse = false }) {
-  const matRef = useRef();
-  useFrame((s) => {
-    if (!matRef.current) return;
-    matRef.current.emissiveIntensity = pulse
-      ? 0.25 + 0.55*(Math.sin(s.clock.elapsedTime*Math.PI*2)*.5+.5)
-      : 0.35;
+function SolutionMemory({ active }) {
+  return (
+    <Suspense fallback={<ProceduralCloud active={active} />}>
+      <NormalizedPLY active={active} path={presentationAssets.sourcePointCloud} />
+    </Suspense>
+  );
+}
+
+function ProceduralCloud({ active, count = 4500, opacityScale = 1 }) {
+  const points = useRef();
+  const material = useRef();
+  const fade = useStageFade(active, 3.8);
+  const data = useMemo(() => {
+    const positions = new Float32Array(count * 3);
+    const colors = new Float32Array(count * 3);
+    const palette = ["#d7b36a", "#a4c7ba", "#ee8f64"];
+
+    for (let i = 0; i < count; i++) {
+      const layer = Math.floor(Math.random() * 4);
+      positions[i * 3] = (Math.random() - 0.5) * 4.2;
+      positions[i * 3 + 1] = (Math.random() - 0.5) * 2.2 + layer * 0.08;
+      positions[i * 3 + 2] = (Math.random() - 0.5) * 3.2;
+      const c = new THREE.Color(palette[i % palette.length]);
+      const v = 0.65 + Math.random() * 0.35;
+      colors[i * 3] = c.r * v;
+      colors[i * 3 + 1] = c.g * v;
+      colors[i * 3 + 2] = c.b * v;
+    }
+
+    return { positions, colors };
+  }, [count]);
+
+  useFrame((state) => {
+    const opacity = fade.current;
+    if (points.current) {
+      points.current.visible = opacity > 0.01;
+      points.current.rotation.y = state.clock.elapsedTime * 0.12;
+    }
+    setOpacity(material.current, opacity * 0.82 * opacityScale);
   });
+
   return (
-    <group scale={scale}>
-      <RoundedBox args={[2.8,1.6,2.1]} radius={0.1}>
-        <meshStandardMaterial ref={matRef} color="#0a0a14" metalness={0.94} roughness={0.1} emissive="#f59e0b" emissiveIntensity={0.35} />
-      </RoundedBox>
-      <mesh position={[0,0,1.06]}><planeGeometry args={[2.6,0.028]} /><meshBasicMaterial color="#f59e0b" /></mesh>
-      {[-0.45,0,0.45].map((x,i) => (
-        <mesh key={i} position={[x,0.81,0]} rotation={[Math.PI/2,0,0]}>
-          <planeGeometry args={[0.022,1.7]} />
-          <meshBasicMaterial color="#f59e0b" transparent opacity={0.45} />
+    <points ref={points}>
+      <bufferGeometry>
+        <bufferAttribute attach="attributes-position" array={data.positions} count={count} itemSize={3} />
+        <bufferAttribute attach="attributes-color" array={data.colors} count={count} itemSize={3} />
+      </bufferGeometry>
+      <pointsMaterial
+        ref={material}
+        size={0.028}
+        vertexColors
+        sizeAttenuation
+        blending={THREE.AdditiveBlending}
+      />
+    </points>
+  );
+}
+
+function PipelineParticles({ active, from, to, color = "#d8b05f", count = 160, opacityScale = 1 }) {
+  const geometry = useRef();
+  const material = useRef();
+  const fade = useStageFade(active, 4.2);
+  const positions = useMemo(() => new Float32Array(count * 3), [count]);
+  const colors = useMemo(() => {
+    const values = new Float32Array(count * 3);
+    const c = new THREE.Color(color);
+    for (let i = 0; i < count; i++) {
+      values[i * 3] = c.r;
+      values[i * 3 + 1] = c.g;
+      values[i * 3 + 2] = c.b;
+    }
+    return values;
+  }, [color, count]);
+
+  useFrame((state) => {
+    const opacity = fade.current;
+    const t = state.clock.elapsedTime;
+    for (let i = 0; i < count; i++) {
+      const p = (t * 0.28 + i / count) % 1;
+      positions[i * 3] = THREE.MathUtils.lerp(from[0], to[0], p);
+      positions[i * 3 + 1] = THREE.MathUtils.lerp(from[1], to[1], p) + Math.sin(p * Math.PI) * 0.26;
+      positions[i * 3 + 2] = THREE.MathUtils.lerp(from[2], to[2], p);
+    }
+    if (geometry.current) geometry.current.attributes.position.needsUpdate = true;
+    setOpacity(material.current, opacity * 0.76 * opacityScale);
+  });
+
+  return (
+    <points>
+      <bufferGeometry ref={geometry}>
+        <bufferAttribute attach="attributes-position" array={positions} count={count} itemSize={3} />
+        <bufferAttribute attach="attributes-color" array={colors} count={count} itemSize={3} />
+      </bufferGeometry>
+      <pointsMaterial
+        ref={material}
+        size={0.035}
+        vertexColors
+        sizeAttenuation
+        blending={THREE.AdditiveBlending}
+      />
+    </points>
+  );
+}
+
+function VideoPlate() {
+  return (
+    <group>
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[1.8, 1.08, 0.08]} />
+        <meshBasicMaterial color="#151613" transparent opacity={0} userData={{ baseOpacity: 0.86 }} />
+      </mesh>
+      <mesh position={[0, 0, 0.055]}>
+        <planeGeometry args={[1.56, 0.78]} />
+        <meshBasicMaterial color="#7c8f83" transparent opacity={0} userData={{ baseOpacity: 0.78 }} />
+      </mesh>
+      <mesh position={[-0.26, 0.08, 0.06]}>
+        <planeGeometry args={[0.84, 0.42]} />
+        <meshBasicMaterial color="#eadcbd" transparent opacity={0} userData={{ baseOpacity: 0.38 }} />
+      </mesh>
+      <mesh position={[0.38, -0.22, 0.061]}>
+        <planeGeometry args={[0.58, 0.1]} />
+        <meshBasicMaterial color="#ec8f64" transparent opacity={0} userData={{ baseOpacity: 0.74 }} />
+      </mesh>
+    </group>
+  );
+}
+
+function makeAsusTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 192;
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#111111";
+  ctx.font = "900 78px Inter, Arial, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("ASUS", canvas.width / 2, canvas.height / 2);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 8;
+  return texture;
+}
+
+function GX10Node() {
+  const labelTexture = useMemo(() => makeAsusTexture(), []);
+
+  useEffect(() => () => labelTexture.dispose(), [labelTexture]);
+
+  return (
+    <group rotation={[0.12, -0.42, 0.02]}>
+      <mesh position={[0, 0, 0]}>
+        <boxGeometry args={[2.1, 0.58, 1.42]} />
+        <meshStandardMaterial
+          color="#c9c8c1"
+          metalness={0.82}
+          roughness={0.22}
+          emissive="#ffffff"
+          emissiveIntensity={0.03}
+          transparent
+          opacity={0}
+          userData={{ baseOpacity: 1 }}
+        />
+      </mesh>
+      <mesh position={[0, 0.04, 0.725]}>
+        <planeGeometry args={[1.05, 0.38]} />
+        <meshBasicMaterial
+          map={labelTexture}
+          transparent
+          opacity={0}
+          toneMapped={false}
+          userData={{ baseOpacity: 0.9 }}
+        />
+      </mesh>
+      <mesh position={[0, 0.31, -0.34]}>
+        <boxGeometry args={[1.52, 0.035, 0.44]} />
+        <meshStandardMaterial
+          color="#eceae2"
+          metalness={0.7}
+          roughness={0.16}
+          emissive="#d6c998"
+          emissiveIntensity={0.16}
+          transparent
+          opacity={0}
+          userData={{ baseOpacity: 0.8 }}
+        />
+      </mesh>
+      {[-0.68, -0.34, 0, 0.34, 0.68].map((x) => (
+        <mesh key={x} position={[x, -0.01, 0.725]}>
+          <boxGeometry args={[0.18, 0.16, 0.025]} />
+          <meshBasicMaterial color="#272725" transparent opacity={0} userData={{ baseOpacity: 0.42 }} />
         </mesh>
       ))}
+      <mesh position={[0, -0.33, 0]}>
+        <boxGeometry args={[1.7, 0.08, 1.08]} />
+        <meshBasicMaterial color="#7d7b73" transparent opacity={0} userData={{ baseOpacity: 0.48 }} />
+      </mesh>
     </group>
   );
 }
 
-// ── Slide 4 · GX10 Detail ─────────────────────────────────────────────────────
-const callout = {
-  color:"#fbbf24", fontSize:"12px", fontWeight:700, fontFamily:"sans-serif",
-  background:"rgba(0,0,0,0.88)", padding:"9px 13px", borderRadius:"8px",
-  border:"1px solid rgba(245,158,11,0.6)", minWidth:"120px", lineHeight:"1.6", pointerEvents:"none",
-};
-const csub = { color:"#e5e7eb", fontWeight:400, fontSize:"11px" };
-const cdet = { color:"rgba(255,255,255,0.45)", fontWeight:400, fontSize:"10px" };
-
-function Slide4({ offset }) {
+function MiniPointMemory({ active, opacityScale = 1 }) {
   return (
-    <group position={[offset,0,0]}>
-      <Stars radius={12} depth={70} count={5000} factor={5} saturation={0.35} fade />
-      <Float speed={0.32} floatIntensity={0.22}>
-        <GX10Box pulse />
-        <Html position={[-3.6,1.8,0]} distanceFactor={10} style={{pointerEvents:"none"}}>
-          <div style={callout}>128 GB<br/><span style={csub}>Unified Memory</span><br/><span style={cdet}>Holds full 3DGS models in RAM</span></div>
-        </Html>
-        <Html position={[0,2.4,0]} distanceFactor={10} style={{pointerEvents:"none",transform:"translateX(-50%)"}}>
-          <div style={{...callout,textAlign:"center"}}>1 petaFLOP<br/><span style={csub}>Neural Engine + GPU</span><br/><span style={cdet}>Trains 3M Gaussians in ~60 s</span></div>
-        </Html>
-        <Html position={[3.6,1.8,0]} distanceFactor={10} style={{pointerEvents:"none"}}>
-          <div style={callout}>100% Local<br/><span style={csub}>Zero cloud upload</span><br/><span style={cdet}>Your data never leaves the room</span></div>
-        </Html>
-      </Float>
-      <pointLight position={[0,5,4]} intensity={2.5} color="#f59e0b" distance={12} />
+    <group scale={0.5}>
+      <ProceduralCloud active={active} count={2200} opacityScale={opacityScale} />
     </group>
   );
 }
 
-// ── Slide 5 · Credits ─ Bridge PLY ───────────────────────────────────────────
-const TEAM = [
-  { color:"#f9c0ff", name:"Elijah" },
-  { color:"#c0ffe1", name:"Team"   },
-  { color:"#ffdec0", name:"Member" },
-  { color:"#ffc0cb", name:"Member" },
-];
+function PipelineScene({ active }) {
+  const { viewport } = useThree();
+  const group = useRef();
+  const light = useRef();
+  const fade = useStageFade(active, 4.2);
+  const span = Math.min(2.85, Math.max(1.35, viewport.width * 0.31));
+  const compact = viewport.width < 5;
+  const opacityScale = compact ? 0.2 : 1;
 
-function Slide5({ offset }) {
-  const cloudRef = useRef();
-  useFrame((s) => { if (cloudRef.current) cloudRef.current.rotation.y = s.clock.elapsedTime * 0.015; });
+  useFrame((state) => {
+    const opacity = fade.current;
+    const visualOpacity = opacity * opacityScale;
+    if (group.current) {
+      group.current.visible = opacity > 0.01;
+      group.current.position.y = compact ? -1.28 : 0.15;
+      group.current.scale.setScalar(compact ? 0.72 : 1);
+      group.current.rotation.y = Math.sin(state.clock.elapsedTime * 0.22) * 0.07;
+      group.current.traverse((child) => {
+        const materials = child.material
+          ? Array.isArray(child.material)
+            ? child.material
+            : [child.material]
+          : [];
+        materials.forEach((mat) => {
+          if (mat.type === "PointsMaterial") return;
+          setOpacity(mat, visualOpacity * (mat.userData?.baseOpacity ?? 1));
+        });
+      });
+    }
+    if (light.current) light.current.intensity = visualOpacity * 2.4;
+  });
+
   return (
-    <group position={[offset,0,0]}>
-      <group ref={cloudRef} position={[0,-0.5,-1]}>
-        <Suspense fallback={<ParticleCloud count={18000} color="#6ee7b7" shape="scattered" size={0.9} spread={3.5} />}>
-          <PLYPointCloud path="/models/CP_Bridge_PC_1_85M.ply" size={0.09} />
-        </Suspense>
+    <group ref={group} position={[0, 0.15, 0]}>
+      <group position={[0, 0, 0]}>
+        <GX10Node />
       </group>
-      {TEAM.map((t,i) => (
-        <group key={i} position={[(i-1.5)*2.2,1.0,2]}>
-          <Float speed={0.25+i*.07} floatIntensity={0.18}>
-            <RoundedBox args={[1.55,1.95,0.09]} radius={0.07}>
-              <MeshDistortMaterial color={t.color} speed={1.5} distort={0.1} metalness={0.05} roughness={0.35} />
-            </RoundedBox>
-            <Html center distanceFactor={10} style={{pointerEvents:"none"}}>
-              <div style={{color:"#111",fontSize:"13px",fontWeight:700,fontFamily:"sans-serif"}}>{t.name}</div>
-            </Html>
-          </Float>
-        </group>
-      ))}
-      <Html center position={[0,-1.8,2]} distanceFactor={10} style={{pointerEvents:"none"}}>
-        <div style={{color:"rgba(255,255,255,0.45)",fontSize:"10px",letterSpacing:"0.3em",fontFamily:"sans-serif",textAlign:"center",textTransform:"uppercase"}}>
-          3DGS · React Three Fiber · Three.js · Apple Silicon
-        </div>
-      </Html>
-      <pointLight position={[0,4,4]} intensity={1.5} color="#22c55e" distance={11} />
-      <pointLight position={[-3,0,3]} intensity={0.8} color="#a855f7" distance={8} />
+      <PipelineParticles active={active} from={[-span + 0.95, 0, 0]} to={[-0.88, 0, 0]} color="#a4c7ba" opacityScale={opacityScale} />
+      <PipelineParticles active={active} from={[0.88, 0, 0]} to={[span - 0.95, 0, 0]} color="#e0a94f" opacityScale={opacityScale} />
+      <pointLight ref={light} position={[0, 3.5, 3]} intensity={0} color="#d8b05f" />
     </group>
   );
 }
 
-// ── Camera ────────────────────────────────────────────────────────────────────
-function CameraHandler({ slideW }) {
-  const cam = useRef();
-  const [slide] = useAtom(slideAtom);
-  const last = useRef(0);
-  const { viewport } = useThree();
-
-  useEffect(() => {
-    const t = setTimeout(() => cam.current?.setLookAt(slide * slideW, 0, 7, slide * slideW, 0, 0), 220);
-    return () => clearTimeout(t);
-  }, [viewport]);
-
-  useEffect(() => {
-    if (last.current === slide) return;
-    const prev = last.current;
-    last.current = slide;
-    cam.current
-      ?.setLookAt(prev * slideW, 2, 14, prev * slideW, 0, 0, true)
-      .then(() => cam.current?.setLookAt(slide * slideW, 0, 7, slide * slideW, 0, 0, true));
-  }, [slide]);
-
+function ProcessPointCloud({ active }) {
   return (
-    <CameraControls
-      ref={cam}
-      smoothTime={0.6}
-      touches={{ one: 0, two: 0, three: 0 }}
-      mouseButtons={{ left: 0, middle: 0, right: 0 }}
-    />
+    <Suspense fallback={<MiniPointMemory active={active} opacityScale={0.7} />}>
+      <NormalizedPLY
+        active={active}
+        path={presentationAssets.pipelinePointCloud}
+        placement="process"
+        delay={1.15}
+        size={0.018}
+      />
+    </Suspense>
   );
 }
 
-// ── Root ──────────────────────────────────────────────────────────────────────
-export const Experience = () => {
+function StatsComputeField({ active }) {
   const { viewport } = useThree();
-  const slideW = viewport.width + 3;
+  const group = useRef();
+  const ringA = useRef();
+  const ringB = useRef();
+  const light = useRef();
+  const fade = useStageFade(active, 4);
+
+  useFrame((state) => {
+    const opacity = fade.current;
+    const compact = viewport.width < 5;
+    if (group.current) {
+      group.current.visible = opacity > 0.01;
+      group.current.position.x = viewport.width > 6 ? 2.05 : 0;
+      group.current.position.y = compact ? -1.0 : -0.05;
+      group.current.scale.setScalar(compact ? 0.78 : 1.1);
+      group.current.rotation.y = Math.sin(state.clock.elapsedTime * 0.35) * 0.16;
+      group.current.traverse((child) => {
+        const materials = child.material
+          ? Array.isArray(child.material)
+            ? child.material
+            : [child.material]
+          : [];
+        materials.forEach((mat) => {
+          if (mat.type === "PointsMaterial") return;
+          setOpacity(mat, opacity * (mat.userData?.baseOpacity ?? 1));
+        });
+      });
+    }
+    setOpacity(ringA.current, opacity * 0.72);
+    setOpacity(ringB.current, opacity * 0.5);
+    if (light.current) light.current.intensity = opacity * 2.1;
+  });
+
+  return (
+    <group ref={group}>
+      <group scale={1.18}>
+        <GX10Node />
+      </group>
+      <mesh rotation={[Math.PI / 2, 0, 0]}>
+        <torusGeometry args={[1.42, 0.012, 10, 128]} />
+        <meshBasicMaterial ref={ringA} color="#e7b160" transparent opacity={0} />
+      </mesh>
+      <mesh rotation={[Math.PI / 2, 0.4, 0]}>
+        <torusGeometry args={[1.78, 0.01, 10, 128]} />
+        <meshBasicMaterial ref={ringB} color="#9fd5c3" transparent opacity={0} />
+      </mesh>
+      <pointLight ref={light} position={[0, 2.5, 2.5]} color="#e7b160" intensity={0} />
+    </group>
+  );
+}
+
+function CreditsField({ active }) {
+  const group = useRef();
+  const leftRing = useRef();
+  const rightRing = useRef();
+  const fade = useStageFade(active, 4);
+
+  useFrame((state) => {
+    const opacity = fade.current;
+    if (group.current) {
+      group.current.visible = opacity > 0.01;
+      group.current.rotation.y = state.clock.elapsedTime * 0.055;
+    }
+    setOpacity(leftRing.current, opacity * 0.85);
+    setOpacity(rightRing.current, opacity * 0.85);
+  });
+
+  return (
+    <group ref={group} position={[0, -0.2, 0]}>
+      <ProceduralCloud active={active} count={6500} />
+      <mesh position={[-1.05, 0.28, 0]}>
+        <torusGeometry args={[0.72, 0.01, 12, 96]} />
+        <meshBasicMaterial ref={leftRing} color="#a4c7ba" transparent opacity={0} />
+      </mesh>
+      <mesh position={[1.05, -0.2, 0]} rotation={[0.2, 0.1, 0]}>
+        <torusGeometry args={[0.72, 0.01, 12, 96]} />
+        <meshBasicMaterial ref={rightRing} color="#ec8f64" transparent opacity={0} />
+      </mesh>
+    </group>
+  );
+}
+
+export function Experience() {
+  const slide = useAtomValue(slideAtom);
+
   return (
     <>
-      <ambientLight intensity={0.1} />
-      <pointLight position={[0,8,8]} intensity={0.6} color="#a855f7" />
-      <CameraHandler slideW={slideW} />
-      <Slide0 offset={0 * slideW} />
-      <Slide1 offset={1 * slideW} />
-      <Slide2 offset={2 * slideW} />
-      <Slide3 offset={3 * slideW} />
-      <Slide4 offset={4 * slideW} />
-      <Slide5 offset={5 * slideW} />
+      <ambientLight intensity={0.72} />
+      <pointLight position={[3, 4, 4]} intensity={1.2} color="#f0d184" />
+      <pointLight position={[-3, -2, 5]} intensity={0.65} color="#8fbcb2" />
+
+      <TitleGlobe active={slide === 0} />
+      <PipelineScene active={slide === 3} />
+      <StatsComputeField active={slide === 4} />
+      <CreditsField active={slide === 5} />
     </>
   );
-};
+}

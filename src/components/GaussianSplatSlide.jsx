@@ -1,51 +1,84 @@
-import { useEffect, useRef, useState } from "react";
-import { useAtom } from "jotai";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { useAtomValue } from "jotai";
 import * as THREE from "three";
 import * as GaussianSplats3D from "@mkkellogg/gaussian-splats-3d";
-import { slideAtom } from "./Overlay";
+import { presentationAssets, slideAtom } from "../presentationState";
 
-const SLIDE_IDX = 2;
+function getMode(slide) {
+  if (slide === 2) {
+    return {
+      className: "is-conversion",
+      path: presentationAssets.sourcePointCloud,
+      delay: 0.85,
+      camera: {
+        start: new THREE.Vector3(0.18, 0.08, 4.8),
+        end: new THREE.Vector3(0.08, 0.06, 4.25),
+        target: new THREE.Vector3(0, 0, 0),
+      },
+    };
+  }
 
-export function GaussianSplatSlide() {
-  const [slide] = useAtom(slideAtom);
+  if (slide === 3) {
+    return {
+      className: "is-pipeline",
+      path: presentationAssets.pipelinePointCloud,
+      delay: 1.15,
+      camera: {
+        start: new THREE.Vector3(0.15, 0.04, 5.1),
+        end: new THREE.Vector3(0.05, 0.03, 4.45),
+        target: new THREE.Vector3(0, 0, 0),
+      },
+    };
+  }
+
+  return null;
+}
+
+export function GaussianSplatLayer() {
+  const slide = useAtomValue(slideAtom);
+  const mode = getMode(slide);
   const containerRef = useRef(null);
-  const visible = slide === SLIDE_IDX;
-
-  // Lazy-mount: only create the viewer the first time slide 3 is shown
-  const [hasEverShown, setHasEverShown] = useState(false);
-  useEffect(() => {
-    if (visible) setHasEverShown(true);
-  }, [visible]);
-
-  // Live state shared with the RAF loop via a plain object (no re-render needed)
-  const live = useRef({
-    dollying: false,
-    dollyProgress: 0,
-    orbitAngle: 0,
+  const stateRef = useRef({
+    mode,
+    progress: 0,
+    path: null,
   });
+  const [shouldMount, setShouldMount] = useState(false);
+  const [scenePath, setScenePath] = useState(null);
 
-  // Sync dollying flag and reset progress when leaving slide
   useEffect(() => {
-    live.current.dollying = visible;
-    if (!visible) live.current.dollyProgress = 0;
-  }, [visible]);
+    stateRef.current.mode = mode;
+    if (mode) {
+      stateRef.current.progress = 0;
+      setScenePath(mode.path);
+      setShouldMount(true);
+    }
+  }, [mode]);
 
-  // Create viewer once on first show, clean up on unmount
+  const frameClass = useMemo(
+    () => `gaussian-splat-layer ${mode?.className ?? "is-hidden"}`,
+    [mode?.className],
+  );
+
   useEffect(() => {
-    if (!hasEverShown || !containerRef.current) return;
+    if (!shouldMount || !scenePath || !containerRef.current) return;
+
     const container = containerRef.current;
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    const renderer = new THREE.WebGLRenderer({
+      antialias: true,
+      alpha: true,
+      preserveDrawingBuffer: true,
+    });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x000000, 0);
+    renderer.domElement.className = "gaussian-splat-canvas";
     container.appendChild(renderer.domElement);
 
-    const camera = new THREE.PerspectiveCamera(
-      60, window.innerWidth / window.innerHeight, 0.01, 500
-    );
-    camera.position.set(0, 0.3, 7);
-    camera.lookAt(0, 0, 0);
+    const camera = new THREE.PerspectiveCamera(58, 1, 0.01, 500);
+    camera.position.copy(stateRef.current.mode?.camera.start ?? new THREE.Vector3(0, 0, 5));
+    camera.lookAt(stateRef.current.mode?.camera.target ?? new THREE.Vector3(0, 0, 0));
 
     const viewer = new GaussianSplats3D.Viewer({
       selfDrivenMode: false,
@@ -57,78 +90,93 @@ export function GaussianSplatSlide() {
     });
 
     let loaded = false;
+    let disposed = false;
     viewer
-      .addSplatScene("/models/example.ply", {
+      .addSplatScene(scenePath, {
         format: GaussianSplats3D.SceneFormat.Ply,
-        splatAlphaRemovalThreshold: 5,
+        splatAlphaRemovalThreshold: 1,
+        progressiveLoad: true,
+        showLoadingUI: false,
       })
-      .then(() => { loaded = true; })
-      .catch(console.error);
+      .then(() => {
+        loaded = true;
+      })
+      .catch((error) => {
+        if (!disposed) console.error(error);
+      });
+
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      const width = Math.max(1, Math.round(rect.width));
+      const height = Math.max(1, Math.round(rect.height));
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height, false);
+    };
 
     let rafId = null;
     let lastTime = performance.now();
+    const tick = () => {
+      rafId = requestAnimationFrame(tick);
+      resize();
 
-    const loop = () => {
-      rafId = requestAnimationFrame(loop);
       const now = performance.now();
       const dt = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
 
-      const lv = live.current;
+      const current = stateRef.current;
+      const active = Boolean(current.mode);
+      current.progress = THREE.MathUtils.damp(current.progress, active ? 1 : 0, 2.2, dt);
 
-      // Advance dolly progress when on use-case slide (slow, cinematic)
-      if (lv.dollying && lv.dollyProgress < 1) {
-        lv.dollyProgress = Math.min(1, lv.dollyProgress + dt * 0.18);
+      const t = current.progress * current.progress * (3 - 2 * current.progress);
+      const cameraSpec = current.mode?.camera;
+      if (cameraSpec) {
+        camera.position.lerpVectors(cameraSpec.start, cameraSpec.end, t);
+        camera.lookAt(cameraSpec.target);
       }
-
-      // Ease-in-out cubic
-      const p = lv.dollyProgress;
-      const t = p < 0.5 ? 4 * p * p * p : 1 - (-2 * p + 2) ** 3 / 2;
-
-      const z = 7 - 4 * t;                           // 7 → 3
-      lv.orbitAngle += dt * 0.12 * (0.2 + 0.8 * t); // gentle orbit, faster when close
-
-      camera.position.x = Math.sin(lv.orbitAngle) * z * 0.18;
-      camera.position.y = 0.3 + 0.3 * t;
-      camera.position.z = z;
-      camera.lookAt(0, 0, 0);
 
       if (loaded) {
-        try { viewer.update(); } catch { /* ignore mid-load errors */ }
-        try { viewer.render(); } catch { /* ignore mid-load errors */ }
+        try {
+          viewer.update();
+          viewer.render();
+        } catch {
+          // Ignore transient render errors while the progressive loader is rebuilding buffers.
+        }
+      } else {
+        renderer.clear();
       }
     };
-    loop();
 
-    const onResize = () => {
-      camera.aspect = window.innerWidth / window.innerHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(window.innerWidth, window.innerHeight);
-    };
-    window.addEventListener("resize", onResize);
+    tick();
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(rafId);
-      window.removeEventListener("resize", onResize);
-      try { viewer.dispose?.(); } catch {}
+      try {
+        viewer.dispose?.();
+      } catch {}
       renderer.dispose();
-      if (container.contains(renderer.domElement))
+      if (container.contains(renderer.domElement)) {
         container.removeChild(renderer.domElement);
+      }
     };
-  }, [hasEverShown]);
+  }, [scenePath, shouldMount]);
 
-  if (!hasEverShown) return null;
+  if (!shouldMount) return null;
 
   return (
-    <div
+    <motion.div
       ref={containerRef}
-      style={{
-        position: "fixed",
-        inset: 0,
-        zIndex: 5,
-        opacity: visible ? 1 : 0,
-        transition: "opacity 0.6s ease",
-        pointerEvents: "none",
+      className={frameClass}
+      initial={false}
+      animate={{
+        opacity: mode ? 1 : 0,
+        scale: mode ? 1 : 0.98,
+      }}
+      transition={{
+        duration: 1.15,
+        delay: mode?.delay ?? 0,
+        ease: [0.22, 1, 0.36, 1],
       }}
     />
   );

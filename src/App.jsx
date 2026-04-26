@@ -1,26 +1,27 @@
 import { Canvas } from "@react-three/fiber";
-import { Leva } from "leva";
+import { MotionConfig } from "framer-motion";
 import { Experience } from "./components/Experience";
+import { GaussianSplatLayer } from "./components/GaussianSplatSlide";
+import { MediaLayer } from "./components/MediaLayer";
 import { Overlay } from "./components/Overlay";
-import { GaussianSplatSlide } from "./components/GaussianSplatSlide";
 
 function App() {
   return (
-    <>
-      <Leva hidden />
-      {/* z-index stack:
-          1  – R3F Canvas (all slides except use-case)
-          5  – GaussianSplatSlide (slide 3 only, own WebGL canvas)
-          10 – Overlay (navigation, text, always on top)  */}
-      <div style={{ position: "fixed", inset: 0, zIndex: 1 }}>
-        <Canvas shadows camera={{ position: [0, 0, 7], fov: 45 }}>
-          <color attach="background" args={["#000008"]} />
+    <MotionConfig transition={{ duration: 0.75, ease: [0.22, 1, 0.36, 1] }}>
+      <main className="deck-shell">
+        <Canvas
+          className="three-stage"
+          camera={{ position: [0, 0, 8], fov: 45, near: 0.1, far: 80 }}
+          gl={{ antialias: true, alpha: true, preserveDrawingBuffer: true }}
+          dpr={[1, 2]}
+        >
           <Experience />
         </Canvas>
-      </div>
-      <GaussianSplatSlide />
-      <Overlay />
-    </>
+        <MediaLayer />
+        <GaussianSplatLayer />
+        <Overlay />
+      </main>
+    </MotionConfig>
   );
 }
 
